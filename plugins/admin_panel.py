@@ -2,16 +2,21 @@ import os
 import json
 import random
 from datetime import datetime
-from pyrogram import filters, Client
+from pyrogram import filters, Client, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from config import BIMBO_OWNER_ID, BIMBO_DATABASE_URL
 from plugins.premium import premium_manager
 from database.access import bimbo
 import logging
+import asyncio
+import aiohttp
+from io import BytesIO
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
 ADMIN_DATA_FILE = "admin_data.json"
+IMAGES_FOLDER = "images/"
 
 def load_admin_data():
     try:
@@ -32,7 +37,7 @@ def load_admin_data():
         'images': {
             'progress': [],
             'start': '',
-            'local_folder': 'images/'
+            'local_folder': IMAGES_FOLDER
         }
     }
 
@@ -47,44 +52,37 @@ admin_data = load_admin_data()
 
 # ── Image helper functions ──
 def get_progress_images():
-    """Get progress images from admin data"""
     return admin_data.get('images', {}).get('progress', [])
 
 def set_progress_images(images_list):
-    """Set progress images"""
     if 'images' not in admin_data:
         admin_data['images'] = {}
     admin_data['images']['progress'] = images_list
     save_admin_data(admin_data)
 
 def get_start_pic():
-    """Get start pic from admin data"""
     return admin_data.get('images', {}).get('start', '')
 
 def set_start_pic(url):
-    """Set start pic"""
     if 'images' not in admin_data:
         admin_data['images'] = {}
     admin_data['images']['start'] = url
     save_admin_data(admin_data)
 
 def get_image_folder():
-    """Get local image folder path"""
-    return admin_data.get('images', {}).get('local_folder', 'images/')
+    return admin_data.get('images', {}).get('local_folder', IMAGES_FOLDER)
 
 def set_image_folder(path):
-    """Set local image folder"""
     if 'images' not in admin_data:
         admin_data['images'] = {}
     admin_data['images']['local_folder'] = path
     save_admin_data(admin_data)
 
 def get_random_progress_image():
-    """Get a random progress image from links or local folder"""
+    """Get a random progress image from admin panel settings."""
     images = get_progress_images()
     folder = get_image_folder()
     
-    # Collect all sources
     all_sources = list(images)
     
     # Check local folder
@@ -94,7 +92,6 @@ def get_random_progress_image():
                      if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) 
                      and not f.startswith('.')]
             if files:
-                # Add full paths
                 all_sources.extend([os.path.join(folder, f) for f in files])
         except Exception:
             pass
@@ -103,6 +100,53 @@ def get_random_progress_image():
         return None
     
     return random.choice(all_sources)
+
+def ensure_images_folder():
+    """Make sure the images folder exists"""
+    folder = get_image_folder()
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+async def download_photo_to_folder(photo, folder):
+    """Download photo from Telegram to local folder. Returns local path or None."""
+    try:
+        # Get file info
+        file_id = photo.file_id
+        file_name = f"img_{int(datetime.now().timestamp() * 1000)}.{photo.file_name or 'jpg'}"
+        
+        # Download
+        file_path = await photo.download(file_name=os.path.join(folder, file_name))
+        
+        logger.info(f"Downloaded photo to: {file_path}")
+        return file_path
+    except Exception as e:
+        logger.error(f"Failed to download photo: {e}")
+        return None
+
+async def download_url_to_folder(url, folder):
+    """Download image from URL to local folder"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    ext = 'jpg'
+                    if 'png' in content_type:
+                        ext = 'png'
+                    elif 'webp' in content_type:
+                        ext = 'webp'
+                    
+                    file_name = f"url_{int(datetime.now().timestamp() * 1000)}.{ext}"
+                    file_path = os.path.join(folder, file_name)
+                    
+                    with open(file_path, 'wb') as f:
+                        f.write(await response.read())
+                    
+                    logger.info(f"Downloaded URL to: {file_path}")
+                    return file_path
+    except Exception as e:
+        logger.error(f"Failed to download URL: {e}")
+    return None
 
 @Client.on_message(filters.command("admin") & filters.user(BIMBO_OWNER_ID))
 async def admin_panel(client: Client, message: Message):
@@ -190,12 +234,10 @@ async def show_admin_panel(callback_query):
     )
 
 async def show_images_panel(callback_query):
-    """Show images management panel"""
     progress_imgs = get_progress_images()
     start_pic = get_start_pic()
     local_folder = get_image_folder()
     
-    # Check local folder
     local_count = 0
     if local_folder and os.path.isdir(local_folder):
         try:
@@ -208,21 +250,23 @@ async def show_images_panel(callback_query):
     text = (
         f" **Images Management**\n\n"
         f" **Progress Images:**\n"
-        f"  Links: {len(progress_imgs)} images\n"
+        f"  Links/URLs: {len(progress_imgs)}\n"
         f"  Local folder: `{local_folder}` ({local_count} files)\n\n"
-        f" **Start Pic:** {start_pic[:50] if start_pic else 'Not set'}...\n\n"
-        f" **Commands:**\n"
-        f"  `/setprogresspic <link>` - Add progress image\n"
-        f"  `/setprogresspics <link1,link2>` - Add multiple\n"
-        f"  `/clearprogresspics` - Clear all progress images\n"
-        f"  `/setstartpic <link>` - Set start image\n"
-        f"  `/setimagefolder <path>` - Set local folder\n"
+        f" **Start Pic:**\n"
+        f"  {start_pic[:60] if start_pic else 'Not set'}...\n\n"
+        f" **How to Add Images:**\n"
+        f"  1. Photo bhejo ya forward karo\n"
+        f"  2. Reply me command daal:\n"
+        f"     `/setprogresspic` - Progress header\n"
+        f"     `/setstartpic` - Start image\n\n"
+        f"  3. Ya multiple photos ek sath bhejo (album)\n"
+        f"     Sab automatically save ho jayenge!"
     )
     
     buttons = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton(" View Progress Pics", callback_data="admin_view_progress"),
-            InlineKeyboardButton(" View Start Pic", callback_data="admin_view_start")
+            InlineKeyboardButton(" View Progress", callback_data="admin_view_progress"),
+            InlineKeyboardButton(" View Start", callback_data="admin_view_start")
         ],
         [
             InlineKeyboardButton(" Clear Progress", callback_data="admin_clear_progress")
@@ -407,37 +451,222 @@ async def toggle_settings(client: Client, callback_query):
     
     await show_settings(callback_query)
 
-# ── Image management commands ──
+# ══════════════════════════════════════════════════════════
+#  PHOTO HANDLING - Send/Forward photos to bot
+# ══════════════════════════════════════════════════════════
 
-@Client.on_message(filters.command("setprogresspic") & filters.user(BIMBO_OWNER_ID))
-async def set_progress_pic(client: Client, message: Message):
-    """Add a progress image link"""
+@Client.on_message(
+    (filters.photo | filters.document) & 
+    filters.user(BIMBO_OWNER_ID) & 
+    filters.private &
+    filters.reply &
+    filters.regex(r"^/setprogresspic$")
+)
+async def set_progress_pic_from_photo(client: Client, message: Message):
+    """Set progress image from replied photo"""
+    folder = ensure_images_folder()
+    
+    # Get the replied photo
+    replied = message.reply_to_message
+    photo = None
+    
+    if replied and replied.photo:
+        photo = replied.photo
+    elif replied and replied.document and replied.document.mime_type.startswith('image/'):
+        # Treat document as photo if it's an image
+        photo = replied.document
+    
+    if not photo:
+        await message.reply_text(" Please reply to a photo!")
+        return
+    
+    # Download photo
+    file_path = await download_photo_to_folder(photo, folder)
+    
+    if not file_path:
+        await message.reply_text(" Failed to download photo!")
+        return
+    
+    # Add to progress images list
+    images = get_progress_images()
+    images.append(file_path)
+    set_progress_images(images)
+    
+    # Get file size
+    file_size = os.path.getsize(file_path)
+    
+    await message.reply_text(
+        f" **Progress Image Added!**\n\n"
+        f" Saved to: `{file_path}`\n"
+        f" Size: {file_size / 1024:.1f} KB\n"
+        f" Total images: {len(images)}\n\n"
+        f" Aur photos bhejo ya forward karo!"
+    )
+
+@Client.on_message(
+    (filters.photo | filters.document) & 
+    filters.user(BIMBO_OWNER_ID) & 
+    filters.private &
+    filters.reply &
+    filters.regex(r"^/setstartpic$")
+)
+async def set_start_pic_from_photo(client: Client, message: Message):
+    """Set start image from replied photo"""
+    folder = ensure_images_folder()
+    
+    replied = message.reply_to_message
+    photo = None
+    
+    if replied and replied.photo:
+        photo = replied.photo
+    elif replied and replied.document and replied.document.mime_type.startswith('image/'):
+        photo = replied.document
+    
+    if not photo:
+        await message.reply_text(" Please reply to a photo!")
+        return
+    
+    file_path = await download_photo_to_folder(photo, folder)
+    
+    if not file_path:
+        await message.reply_text(" Failed to download photo!")
+        return
+    
+    set_start_pic(file_path)
+    
+    await message.reply_text(
+        f" **Start Image Set!**\n\n"
+        f" Saved to: `{file_path}`"
+    )
+
+@Client.on_message(
+    filters.photo & 
+    filters.user(BIMBO_OWNER_ID) & 
+    filters.private
+)
+async def handle_photo_upload(client: Client, message: Message):
+    """Handle direct photo upload - ask what to do with it"""
+    await message.reply_text(
+        " **Photo Received!**\n\n"
+        "Is image ko kya karna hai?\n"
+        "Reply me command daal ke batao:\n\n"
+        "  `/setprogresspic` - Progress header me add karo\n"
+        "  `/setstartpic` - Start image banao\n\n"
+        "**Ya multiple photos ek sath bhejo (album)**\n"
+        "Aur reply me `/setprogresspics` daalo - sab save ho jayenge!",
+        reply_to_message_id=message.id
+    )
+
+@Client.on_message(
+    filters.media_group & 
+    filters.user(BIMBO_OWNER_ID) & 
+    filters.private
+)
+async def handle_media_group(client: Client, message: Message):
+    """Handle multiple photos (album) - save all as progress images"""
+    folder = ensure_images_folder()
+    
+    # Collect all photos from the media group
+    photos = []
+    if message.media_group_id:
+        # Get all messages in this group
+        messages = await client.get_media_group(
+            chat_id=message.chat.id,
+            message_id=message.id
+        )
+        
+        for msg in messages:
+            if msg.photo:
+                photos.append(msg.photo)
+            elif msg.document and msg.document.mime_type.startswith('image/'):
+                photos.append(msg.document)
+    
+    if not photos:
+        return
+    
+    # Download all photos
+    saved_count = 0
+    saved_files = []
+    
+    progress_msg = await message.reply_text(
+        f" **Processing {len(photos)} photos...**\n\n"
+        "Downloading..."
+    )
+    
+    for i, photo in enumerate(photos, 1):
+        file_path = await download_photo_to_folder(photo, folder)
+        if file_path:
+            saved_files.append(file_path)
+            saved_count += 1
+        
+        # Update progress
+        if i % 3 == 0 or i == len(photos):
+            try:
+                await progress_msg.edit_text(
+                    f" **Processing {len(photos)} photos...**\n\n"
+                    f" Downloaded: {i}/{len(photos)}"
+                )
+            except Exception:
+                pass
+    
+    if saved_count > 0:
+        # Add all to progress images
+        images = get_progress_images()
+        images.extend(saved_files)
+        set_progress_images(images)
+        
+        await progress_msg.edit_text(
+            f" **{saved_count} Photos Saved!**\n\n"
+            f" All added to progress images.\n"
+            f" Total: {len(images)} images\n\n"
+            f" Folder: `{folder}`"
+        )
+    else:
+        await progress_msg.edit_text(" Failed to save any photos!")
+
+# ══════════════════════════════════════════════════════════
+#  TEXT COMMANDS
+# ══════════════════════════════════════════════════════════
+
+@Client.on_message(filters.command("setprogresspic") & filters.user(BIMBO_OWNER_ID) & ~filters.reply)
+async def set_progress_pic_url(client: Client, message: Message):
+    """Add a progress image from URL"""
     if len(message.command) < 2:
         await message.reply_text(
-            "**Usage:** `/setprogresspic <image_url>`\n\n"
-            "Add a progress header image. Use multiple times to add more images.\n"
-            "Example: `/setprogresspic https://telegra.ph/file/xxx.jpg`"
+            "**Usage:**\n"
+            "  1. Photo bhejo/forward karo, phir reply me `/setprogresspic`\n"
+            "  2. Ya URL daal: `/setprogresspic https://...`\n"
+            "  3. Ya multiple photos bhejo (album) sab auto-save"
         )
         return
     
     url = message.command[1].strip()
+    folder = ensure_images_folder()
+    
+    # Download from URL
+    file_path = await download_url_to_folder(url, folder)
+    
+    if not file_path:
+        await message.reply_text(" Failed to download image from URL!")
+        return
+    
     images = get_progress_images()
-    images.append(url)
+    images.append(file_path)
     set_progress_images(images)
     
     await message.reply_text(
-        f" Progress image added!\n\n"
-        f" Total images: {len(images)}\n"
-        f" Added: `{url[:60]}...`"
+        f" **Progress Image Added!**\n\n"
+        f" Saved: `{file_path}`\n"
+        f" Total: {len(images)} images"
     )
 
 @Client.on_message(filters.command("setprogresspics") & filters.user(BIMBO_OWNER_ID))
 async def set_progress_pics(client: Client, message: Message):
-    """Add multiple progress image links (comma separated)"""
+    """Add multiple progress image links"""
     if len(message.command) < 2:
         await message.reply_text(
             "**Usage:** `/setprogresspics <url1,url2,url3>`\n\n"
-            "Add multiple progress images at once (comma separated)."
+            "Ya multiple photos ek sath bhejo (album) - sab auto-save!"
         )
         return
     
@@ -446,14 +675,32 @@ async def set_progress_pics(client: Client, message: Message):
         await message.reply_text(" No valid URLs found!")
         return
     
-    images = get_progress_images()
-    images.extend(urls)
-    set_progress_images(images)
+    folder = ensure_images_folder()
+    saved = []
     
-    await message.reply_text(
-        f" Added {len(urls)} progress images!\n\n"
-        f" Total: {len(images)} images"
-    )
+    progress_msg = await message.reply_text(f" Downloading {len(urls)} images...")
+    
+    for i, url in enumerate(urls, 1):
+        file_path = await download_url_to_folder(url, folder)
+        if file_path:
+            saved.append(file_path)
+        
+        try:
+            await progress_msg.edit_text(f" Downloading... {i}/{len(urls)}")
+        except Exception:
+            pass
+    
+    if saved:
+        images = get_progress_images()
+        images.extend(saved)
+        set_progress_images(images)
+        
+        await progress_msg.edit_text(
+            f" **Added {len(saved)} images!**\n\n"
+            f" Total: {len(images)} images"
+        )
+    else:
+        await progress_msg.edit_text(" Failed to download any images!")
 
 @Client.on_message(filters.command("clearprogresspics") & filters.user(BIMBO_OWNER_ID))
 async def clear_progress_pics(client: Client, message: Message):
@@ -465,23 +712,42 @@ async def clear_progress_pics(client: Client, message: Message):
 async def list_progress_pics(client: Client, message: Message):
     """List all progress images"""
     images = get_progress_images()
-    if not images:
+    folder = get_image_folder()
+    
+    local_count = 0
+    if folder and os.path.isdir(folder):
+        try:
+            local_count = len([f for f in os.listdir(folder) 
+                             if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) 
+                             and not f.startswith('.')])
+        except Exception:
+            pass
+    
+    if not images and local_count == 0:
         await message.reply_text(" No progress images set.")
         return
     
-    text = " **Progress Images**\n\n"
-    for i, img in enumerate(images, 1):
-        text += f"{i}. `{img[:60]}...`\n"
+    text = f" **Progress Images**\n\n"
+    text += f" Links/URLs: {len(images)}\n"
+    text += f" Local files: {local_count}\n\n"
+    
+    if images:
+        text += "**Links:**\n"
+        for i, img in enumerate(images[:10], 1):
+            text += f"{i}. `{img[:50]}...`\n"
+        if len(images) > 10:
+            text += f"... and {len(images) - 10} more\n"
     
     await message.reply_text(text)
 
-@Client.on_message(filters.command("setstartpic") & filters.user(BIMBO_OWNER_ID))
-async def set_start_pic_cmd(client: Client, message: Message):
-    """Set start pic"""
+@Client.on_message(filters.command("setstartpic") & filters.user(BIMBO_OWNER_ID) & ~filters.reply)
+async def set_start_pic_url(client: Client, message: Message):
+    """Set start pic from URL"""
     if len(message.command) < 2:
         await message.reply_text(
-            "**Usage:** `/setstartpic <image_url>`\n\n"
-            "Set the start command image."
+            "**Usage:**\n"
+            "  1. Photo bhejo, phir reply me `/setstartpic`\n"
+            "  2. Ya URL: `/setstartpic https://...`"
         )
         return
     
@@ -500,13 +766,9 @@ async def set_image_folder_cmd(client: Client, message: Message):
         return
     
     path = message.command[1].strip()
-    if not os.path.isdir(path):
-        await message.reply_text(f" Folder not found: `{path}`\n\nPlease create the folder first.")
-        return
-    
+    os.makedirs(path, exist_ok=True)
     set_image_folder(path)
     
-    # Count files
     files = [f for f in os.listdir(path) 
              if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) 
              and not f.startswith('.')]
