@@ -672,7 +672,7 @@ _photo_update_count = {}     # user_id -> count of photo updates
 
 async def update_user_progress(client, user_id, force=False):
     """Edit exactly one canonical dashboard with race/FloodWait protection.
-    Uses anime image UI with text fallback."""
+    Premium anime image UI with minimal caption."""
     from pyrogram.errors import FloodWait
 
     now = time.time()
@@ -711,18 +711,23 @@ async def update_user_progress(client, user_id, force=False):
         photo_count = _photo_update_count.get(user_id, 0)
 
         # Anime image strategy:
-        # - First update: send photo
+        # - First update: send photo with minimal caption
         # - Every 3rd update (15 sec): regenerate + replace photo
-        # - Other updates: edit caption only (text below image)
-        # This avoids spam while keeping the anime look
+        # - Other updates: edit caption only (live text below image)
         regen_photo = not is_photo or (photo_count >= 3)
 
         if regen_photo:
-            # Generate and send fresh anime card
+            # Generate and send fresh anime card with MINIMAL caption
             try:
                 from plugins.anime_progress_ui import send_anime_progress
-                caption = text  # Full text as caption below image
-                sent = await send_anime_progress(client, user_id, text, caption=caption[:1024], reply_to=None)
+                
+                # Minimal caption (just status line)
+                from helper_funcs.display_progress import get_user_active_tasks
+                active = get_user_active_tasks(user_id)
+                active_now = len([t for t in active if t.get('status') not in ('queued', 'waiting')])
+                minimal_caption = f"⚡ **BIMBO LIVE** • `{active_now} active`"
+                
+                sent = await send_anime_progress(client, user_id, text, caption=minimal_caption, reply_to=None)
                 if sent:
                     _dashboard_is_photo[user_id] = True
                     _photo_update_count[user_id] = 0
@@ -739,22 +744,21 @@ async def update_user_progress(client, user_id, force=False):
             except Exception as e:
                 logger.debug(f"Anime photo failed: {e}")
 
-        # ─ Fallback: text caption edit or text message ──
+        # ─ Fallback: text caption edit ─
         try:
             _last_progress_update[user_id] = now
 
             if is_photo:
-                # Can't edit photo, but can edit caption
+                # Edit caption with live text
                 try:
                     await message.edit_caption(text[:1024])
                     _photo_update_count[user_id] = photo_count + 1
                     _progress_flood_until.pop(user_id, None)
                     return
                 except Exception as e:
-                    # Caption edit failed, fall through to text
                     logger.debug(f"Caption edit failed: {e}")
 
-            # Plain text dashboard
+            # Plain text dashboard (fallback)
             await message.edit_text(text)
             _progress_flood_until.pop(user_id, None)
         except FloodWait as exc:
