@@ -319,11 +319,7 @@ def clear_user_message(user_id, message=None):
 
 
 async def finalize_user_progress(client, user_id, message=None, delete_if_idle=True):
-    """Delete dashboard only after the user's LAST active task finishes.
-
-    A completed task must never delete the shared dashboard while another
-    download/upload is still active.
-    """
+    """Delete dashboard only after the user's LAST active task finishes."""
     async with _progress_lock(user_id):
         current = _task_messages.get(user_id)
         active = get_user_active_tasks(user_id)
@@ -338,19 +334,29 @@ async def finalize_user_progress(client, user_id, message=None, delete_if_idle=T
                 try:
                     text = await build_advanced_progress_text(user_id)
                     if text:
-                        await current.edit_text(text)
+                        is_photo = _dashboard_is_photo.get(user_id, False)
+                        if is_photo:
+                            try:
+                                await current.edit_caption(text[:1024])
+                            except Exception:
+                                await current.edit_text(text)
+                        else:
+                            await current.edit_text(text)
                 except Exception as exc:
                     if "MESSAGE_NOT_MODIFIED" not in str(exc).upper():
                         logger.debug("Final progress refresh skipped: %s", exc)
             return False
 
         if current is None:
+            _dashboard_is_photo.pop(user_id, None)
+            _photo_update_count.pop(user_id, None)
             return True
-        # With no active tasks it is safe to remove the current canonical
-        # message even if a caller still holds an older, recreated Message.
+
         _task_messages.pop(user_id, None)
         _last_progress_update.pop(user_id, None)
         _progress_flood_until.pop(user_id, None)
+        _dashboard_is_photo.pop(user_id, None)
+        _photo_update_count.pop(user_id, None)
         if delete_if_idle:
             try:
                 await current.delete()
@@ -661,14 +667,15 @@ def status_text(task):
 
 _last_progress_update = {}  # user_id -> timestamp
 _progress_flood_until = {}   # user_id -> hard Telegram cooldown timestamp
+_dashboard_is_photo = {}     # user_id -> True if current dashboard is a photo
+_photo_update_count = {}     # user_id -> count of photo updates
 
 async def update_user_progress(client, user_id, force=False):
-    """Edit exactly one canonical dashboard with race/FloodWait protection."""
+    """Edit exactly one canonical dashboard with race/FloodWait protection.
+    Uses anime image UI with text fallback."""
     from pyrogram.errors import FloodWait
 
     now = time.time()
-    # A Telegram FloodWait is a hard cooldown. Even stage-changing force=True
-    # refreshes must respect it or every concurrent task retries too early.
     if now < _progress_flood_until.get(user_id, 0):
         return
     last = _last_progress_update.get(user_id, 0)
@@ -676,7 +683,6 @@ async def update_user_progress(client, user_id, force=False):
         return
 
     async with _progress_lock(user_id):
-        # Re-check after waiting for another task's edit to finish.
         now = time.time()
         if now < _progress_flood_until.get(user_id, 0):
             return
@@ -693,41 +699,90 @@ async def update_user_progress(client, user_id, force=False):
             _task_messages.pop(user_id, None)
             _last_progress_update.pop(user_id, None)
             _progress_flood_until.pop(user_id, None)
+            _dashboard_is_photo.pop(user_id, None)
+            _photo_update_count.pop(user_id, None)
             try:
                 await message.delete()
             except Exception:
                 pass
             return
 
+        is_photo = _dashboard_is_photo.get(user_id, False)
+        photo_count = _photo_update_count.get(user_id, 0)
+
+        # Anime image strategy:
+        # - First update: send photo
+        # - Every 3rd update (15 sec): regenerate + replace photo
+        # - Other updates: edit caption only (text below image)
+        # This avoids spam while keeping the anime look
+        regen_photo = not is_photo or (photo_count >= 3)
+
+        if regen_photo:
+            # Generate and send fresh anime card
+            try:
+                from plugins.anime_progress_ui import send_anime_progress
+                caption = text  # Full text as caption below image
+                sent = await send_anime_progress(client, user_id, text, caption=caption[:1024], reply_to=None)
+                if sent:
+                    _dashboard_is_photo[user_id] = True
+                    _photo_update_count[user_id] = 0
+                    # Delete old message if different
+                    if message and _message_identity(message) != _message_identity(sent):
+                        try:
+                            await message.delete()
+                        except Exception:
+                            pass
+                    _task_messages[user_id] = sent
+                    _last_progress_update[user_id] = now
+                    _progress_flood_until.pop(user_id, None)
+                    return
+            except Exception as e:
+                logger.debug(f"Anime photo failed: {e}")
+
+        # ─ Fallback: text caption edit or text message ──
         try:
             _last_progress_update[user_id] = now
+
+            if is_photo:
+                # Can't edit photo, but can edit caption
+                try:
+                    await message.edit_caption(text[:1024])
+                    _photo_update_count[user_id] = photo_count + 1
+                    _progress_flood_until.pop(user_id, None)
+                    return
+                except Exception as e:
+                    # Caption edit failed, fall through to text
+                    logger.debug(f"Caption edit failed: {e}")
+
+            # Plain text dashboard
             await message.edit_text(text)
             _progress_flood_until.pop(user_id, None)
         except FloodWait as exc:
             wait_seconds = max(1, int(getattr(exc, 'value', 3)))
             _progress_flood_until[user_id] = now + wait_seconds + 1
             _last_progress_update[user_id] = now
-            logger.warning(
-                "⏳ FloodWait: %ss - dashboard hard cooldown enabled",
-                wait_seconds,
-            )
+            logger.warning("⏳ FloodWait: %ss - dashboard hard cooldown enabled", wait_seconds)
         except Exception as exc:
             error_text = str(exc)
-            if (
-                "MESSAGE_NOT_MODIFIED" in error_text.upper()
-                or "same content" in error_text.lower()
-            ):
+            if "MESSAGE_NOT_MODIFIED" in error_text.upper() or "same content" in error_text.lower():
                 return
-
-            logger.error("Progress update error: %s", exc)
-            gone_markers = (
-                "MESSAGE_ID_INVALID", "MessageIdInvalid",
-                "message to edit not found", "MESSAGE_EMPTY",
-            )
+            gone_markers = ("MESSAGE_ID_INVALID", "MessageIdInvalid", "message to edit not found", "MESSAGE_EMPTY")
             if not any(marker in error_text for marker in gone_markers):
+                logger.error("Progress update error: %s", exc)
                 return
-
-            # Dashboard was manually/automatically deleted. Clear the stale
+            # Dashboard deleted, recreate
+            _task_messages.pop(user_id, None)
+            _last_progress_update.pop(user_id, None)
+            _progress_flood_until.pop(user_id, None)
+            _dashboard_is_photo.pop(user_id, None)
+            _photo_update_count.pop(user_id, None)
+            if client is not None:
+                try:
+                    replacement = await client.send_message(user_id, text)
+                    _task_messages[user_id] = replacement
+                    _last_progress_update[user_id] = time.time()
+                except Exception as recreate_exc:
+                    logger.error("Could not recreate progress dashboard: %s", recreate_exc)
             # mapping and recreate one once, under the same lock.
             _task_messages.pop(user_id, None)
             _last_progress_update.pop(user_id, None)
