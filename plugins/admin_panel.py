@@ -38,7 +38,8 @@ def load_admin_data():
             'progress': [],
             'start': '',
             'local_folder': IMAGES_FOLDER
-        }
+        },
+        'pending_actions': {}  # user_id -> action type
     }
 
 def save_admin_data(data):
@@ -110,17 +111,40 @@ def ensure_images_folder():
 async def download_photo_to_folder(photo, folder):
     """Download photo from Telegram to local folder. Returns local path or None."""
     try:
-        # Get file info
-        file_id = photo.file_id
-        file_name = f"img_{int(datetime.now().timestamp() * 1000)}.{photo.file_name or 'jpg'}"
+        # Get file extension - Telegram photos don't have file_name attribute
+        ext = 'jpg'  # Default extension
+        if hasattr(photo, 'file_name') and photo.file_name:
+            # Document with filename
+            ext = photo.file_name.split('.')[-1] if '.' in photo.file_name else 'jpg'
+        elif hasattr(photo, 'mime_type') and photo.mime_type:
+            # Get extension from mime type
+            if 'png' in photo.mime_type:
+                ext = 'png'
+            elif 'webp' in photo.mime_type:
+                ext = 'webp'
+            elif 'gif' in photo.mime_type:
+                ext = 'gif'
+        
+        # Generate unique filename
+        timestamp = int(datetime.now().timestamp() * 1000)
+        file_name = f"img_{timestamp}.{ext}"
+        
+        # Full path
+        full_path = os.path.join(folder, file_name)
         
         # Download
-        file_path = await photo.download(file_name=os.path.join(folder, file_name))
+        file_path = await photo.download(file_name=full_path)
         
-        logger.info(f"Downloaded photo to: {file_path}")
-        return file_path
+        # Verify file exists
+        if file_path and os.path.exists(file_path):
+            file_size = os.path.getsize(file_path)
+            logger.info(f"Downloaded photo: {file_path} ({file_size} bytes)")
+            return file_path
+        else:
+            logger.error(f"Download failed - file not found: {full_path}")
+            return None
     except Exception as e:
-        logger.error(f"Failed to download photo: {e}")
+        logger.error(f"Failed to download photo: {e}", exc_info=True)
         return None
 
 async def download_url_to_folder(url, folder):
@@ -182,6 +206,7 @@ async def admin_panel(client: Client, message: Message):
 @Client.on_callback_query(filters.regex("^admin_"))
 async def admin_callback(client: Client, callback_query):
     data = callback_query.data
+    user_id = callback_query.from_user.id
     
     if data == "admin_channels":
         await show_channels(callback_query)
@@ -203,6 +228,20 @@ async def admin_callback(client: Client, callback_query):
         await show_images_panel(callback_query)
     elif data == "admin_back":
         await show_admin_panel(callback_query)
+    elif data == "action_add_progress":
+        # Set pending action for progress photos
+        if 'pending_actions' not in admin_data:
+            admin_data['pending_actions'] = {}
+        admin_data['pending_actions'][str(user_id)] = 'progress'
+        save_admin_data(admin_data)
+        await callback_query.answer(" Now send photos! They will be saved as progress headers.", show_alert=False)
+    elif data == "action_set_start":
+        # Set pending action for start photo
+        if 'pending_actions' not in admin_data:
+            admin_data['pending_actions'] = {}
+        admin_data['pending_actions'][str(user_id)] = 'start'
+        save_admin_data(admin_data)
+        await callback_query.answer(" Now send a photo! It will be set as start image.", show_alert=False)
 
 async def show_admin_panel(callback_query):
     buttons = InlineKeyboardMarkup([
@@ -255,15 +294,16 @@ async def show_images_panel(callback_query):
         f" **Start Pic:**\n"
         f"  {start_pic[:60] if start_pic else 'Not set'}...\n\n"
         f" **How to Add Images:**\n"
-        f"  1. Photo bhejo ya forward karo\n"
-        f"  2. Reply me command daal:\n"
-        f"     `/setprogresspic` - Progress header\n"
-        f"     `/setstartpic` - Start image\n\n"
-        f"  3. Ya multiple photos ek sath bhejo (album)\n"
-        f"     Sab automatically save ho jayenge!"
+        f"  • Neeche buttons dabao\n"
+        f"  • Phir photos bhejo (single ya album)\n"
+        f"  • Ya URL commands use karo"
     )
     
     buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(" Add Progress Photos", callback_data="action_add_progress"),
+            InlineKeyboardButton(" Set Start Photo", callback_data="action_set_start")
+        ],
         [
             InlineKeyboardButton(" View Progress", callback_data="admin_view_progress"),
             InlineKeyboardButton(" View Start", callback_data="admin_view_start")
@@ -545,7 +585,65 @@ async def set_start_pic_from_photo(client: Client, message: Message):
     filters.private
 )
 async def handle_photo_upload(client: Client, message: Message):
-    """Handle photo upload - show buttons to choose what to do"""
+    """Handle photo upload - check pending action or show buttons"""
+    user_id = str(message.from_user.id)
+    pending = admin_data.get('pending_actions', {}).get(user_id)
+    folder = ensure_images_folder()
+    
+    # Check if there's a pending action
+    if pending == 'progress':
+        # Auto-save as progress
+        photo = message.photo if message.photo else message.document
+        if photo and (not message.document or message.document.mime_type.startswith('image/')):
+            file_path = await download_photo_to_folder(photo, folder)
+            if file_path:
+                images = get_progress_images()
+                images.append(file_path)
+                set_progress_images(images)
+                
+                # Clear pending action
+                if 'pending_actions' in admin_data:
+                    admin_data['pending_actions'].pop(user_id, None)
+                    save_admin_data(admin_data)
+                
+                await message.reply_text(
+                    f" **Progress Image Added!**\n\n"
+                    f" Saved: `{os.path.basename(file_path)}`\n"
+                    f" Total: {len(images)} images\n\n"
+                    f" Aur photos bhejo!"
+                )
+                logger.info(f"Progress image saved: {file_path}")
+            else:
+                await message.reply_text(" Failed to download photo!")
+        else:
+            await message.reply_text(" Invalid photo!")
+        return
+    
+    elif pending == 'start':
+        # Auto-save as start pic
+        photo = message.photo if message.photo else message.document
+        if photo and (not message.document or message.document.mime_type.startswith('image/')):
+            file_path = await download_photo_to_folder(photo, folder)
+            if file_path:
+                set_start_pic(file_path)
+                
+                # Clear pending action
+                if 'pending_actions' in admin_data:
+                    admin_data['pending_actions'].pop(user_id, None)
+                    save_admin_data(admin_data)
+                
+                await message.reply_text(
+                    f" **Start Image Set!**\n\n"
+                    f" Saved: `{os.path.basename(file_path)}`"
+                )
+                logger.info(f"Start image saved: {file_path}")
+            else:
+                await message.reply_text(" Failed to download photo!")
+        else:
+            await message.reply_text(" Invalid photo!")
+        return
+    
+    # No pending action - show buttons
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(" Progress Header", callback_data="save_as_progress"),
@@ -569,7 +667,54 @@ async def handle_photo_upload(client: Client, message: Message):
     filters.private
 )
 async def handle_media_group(client: Client, message: Message):
-    """Handle multiple photos (album) - show buttons"""
+    """Handle multiple photos (album) - check pending action or show buttons"""
+    user_id = str(message.from_user.id)
+    pending = admin_data.get('pending_actions', {}).get(user_id)
+    folder = ensure_images_folder()
+    
+    # Check if there's a pending action
+    if pending == 'progress':
+        # Auto-save all as progress
+        photos_to_save = []
+        if message.media_group_id:
+            messages = await client.get_media_group(
+                chat_id=message.chat.id,
+                message_id=message.id
+            )
+            for msg in messages:
+                if msg.photo:
+                    photos_to_save.append(msg.photo)
+                elif msg.document and msg.document.mime_type.startswith('image/'):
+                    photos_to_save.append(msg.document)
+        
+        if photos_to_save:
+            saved_count = 0
+            progress_msg = await message.reply_text(f" **Downloading {len(photos_to_save)} photos...**")
+            
+            for photo in photos_to_save:
+                file_path = await download_photo_to_folder(photo, folder)
+                if file_path:
+                    images = get_progress_images()
+                    images.append(file_path)
+                    set_progress_images(images)
+                    saved_count += 1
+            
+            # Clear pending action
+            if 'pending_actions' in admin_data:
+                admin_data['pending_actions'].pop(user_id, None)
+                save_admin_data(admin_data)
+            
+            await progress_msg.edit_text(
+                f" **{saved_count} Progress Images Added!**\n\n"
+                f" Total: {len(get_progress_images())} images\n\n"
+                f" Aur photos bhejo!"
+            )
+            logger.info(f"Album saved: {saved_count} images")
+        else:
+            await message.reply_text(" No valid photos in album!")
+        return
+    
+    # No pending action - show buttons
     buttons = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(" Progress Headers", callback_data="save_album_as_progress"),
