@@ -203,7 +203,7 @@ async def admin_panel(client: Client, message: Message):
         reply_markup=buttons
     )
 
-@Client.on_callback_query(filters.regex("^admin_"))
+@Client.on_callback_query(filters.regex("^(admin_|action_|save_|view_|clear_)"))
 async def admin_callback(client: Client, callback_query):
     data = callback_query.data
     user_id = callback_query.from_user.id
@@ -228,20 +228,28 @@ async def admin_callback(client: Client, callback_query):
         await show_images_panel(callback_query)
     elif data == "admin_back":
         await show_admin_panel(callback_query)
+    elif data == "admin_view_progress":
+        await show_view_progress(callback_query)
+    elif data == "admin_view_start":
+        await show_view_start(callback_query)
+    elif data == "admin_clear_progress":
+        set_progress_images([])
+        await callback_query.answer("All progress images cleared!", show_alert=True)
+        await show_images_panel(callback_query)
     elif data == "action_add_progress":
         # Set pending action for progress photos
         if 'pending_actions' not in admin_data:
             admin_data['pending_actions'] = {}
         admin_data['pending_actions'][str(user_id)] = 'progress'
         save_admin_data(admin_data)
-        await callback_query.answer(" Now send photos! They will be saved as progress headers.", show_alert=False)
+        await callback_query.answer("Now send photos! They will be saved as progress headers.", show_alert=False)
     elif data == "action_set_start":
         # Set pending action for start photo
         if 'pending_actions' not in admin_data:
             admin_data['pending_actions'] = {}
         admin_data['pending_actions'][str(user_id)] = 'start'
         save_admin_data(admin_data)
-        await callback_query.answer(" Now send a photo! It will be set as start image.", show_alert=False)
+        await callback_query.answer("Now send a photo! It will be set as start image.", show_alert=False)
 
 async def show_admin_panel(callback_query):
     buttons = InlineKeyboardMarkup([
@@ -472,6 +480,58 @@ async def show_database(callback_query):
     
     buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton(" Back", callback_data="admin_back")]
+    ])
+    
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+async def show_view_progress(callback_query):
+    """Show all progress images"""
+    progress_imgs = get_progress_images()
+    folder = get_image_folder()
+    
+    local_count = 0
+    if folder and os.path.isdir(folder):
+        try:
+            local_count = len([f for f in os.listdir(folder) 
+                             if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp')) 
+                             and not f.startswith('.')])
+        except Exception:
+            pass
+    
+    text = f" **Progress Images**\n\n"
+    text += f" Links/URLs: {len(progress_imgs)}\n"
+    text += f" Local files: {local_count}\n\n"
+    
+    if progress_imgs:
+        text += "**Links/Paths:**\n"
+        for i, img in enumerate(progress_imgs[:10], 1):
+            text += f"{i}. `{img[:50]}...`\n"
+        if len(progress_imgs) > 10:
+            text += f"... and {len(progress_imgs) - 10} more\n"
+    else:
+        text += " No progress images set.\n\n"
+        text += "To add:\n"
+        text += "  • Use 'Add Progress Photos' button\n"
+        text += "  • Or send photo and click button\n"
+        text += "  • Or use /setprogresspic command"
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton(" Back", callback_data="admin_images")]
+    ])
+    
+    await callback_query.message.edit_text(text, reply_markup=buttons)
+
+async def show_view_start(callback_query):
+    """Show current start image"""
+    start_pic = get_start_pic()
+    
+    if not start_pic:
+        text = " **Start Image**\n\n Not set yet.\n\n To set:\n  • Use 'Set Start Photo' button\n  • Or send photo and click button\n  • Or use /setstartpic command"
+    else:
+        text = f" **Start Image**\n\n Current: `{start_pic[:80]}...`"
+    
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton(" Back", callback_data="admin_images")]
     ])
     
     await callback_query.message.edit_text(text, reply_markup=buttons)
