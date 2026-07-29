@@ -696,28 +696,30 @@ def _get_random_header_image():
         return None
 
 
-async def _send_progress_header(client, chat_id, reply_to_msg_id=None):
-    """Send header image for progress dashboard. Returns photo message or None."""
+async def _send_progress_with_caption(client, chat_id, caption, reply_to_msg_id=None):
+    """Send photo with caption (WZML style - image + text together)."""
     try:
         image_path = _get_random_header_image()
         if not image_path:
             return None
         
+        # Photo + Caption ek sath (WZML style)
         sent = await client.send_photo(
             chat_id=chat_id,
             photo=image_path,
+            caption=caption[:1024] if caption else None,
             reply_to_message_id=reply_to_msg_id
         )
-        logger.debug(f"Sent progress header: {image_path}")
+        logger.debug(f"Sent progress photo with caption: {image_path}")
         return sent
     except Exception as e:
-        logger.debug(f"Header image send failed: {e}")
+        logger.debug(f"Progress photo send failed: {e}")
         return None
 
 
 async def update_user_progress(client, user_id, force=False):
     """Edit exactly one canonical dashboard with race/FloodWait protection.
-    Sends anime sticker once per task, keeps text UI intact."""
+    Photo + Caption ek sath (WZML style)."""
     from pyrogram.errors import FloodWait
 
     now = time.time()
@@ -752,30 +754,38 @@ async def update_user_progress(client, user_id, force=False):
                 pass
             return
 
-        # Send anime sticker ONCE per task (when message is first created)
-        sticker_msg = _user_sticker_msg.get(user_id)
-        if sticker_msg is None and not _dashboard_is_photo.get(user_id, False):
-            # No sticker yet - send one (replying to the progress message)
+        # Send photo + caption ONCE per task (WZML style)
+        photo_msg = _user_sticker_msg.get(user_id)
+        if photo_msg is None and not _dashboard_is_photo.get(user_id, False):
+            # No photo yet - send photo with caption
             try:
-                sticker_msg = await _send_progress_header(client, user_id, reply_to_msg_id=message.id)
-                if sticker_msg:
-                    _user_sticker_msg[user_id] = sticker_msg
+                photo_msg = await _send_progress_with_caption(client, user_id, text, reply_to_msg_id=None)
+                if photo_msg:
+                    _user_sticker_msg[user_id] = photo_msg
+                    _dashboard_is_photo[user_id] = True
+                    _task_messages[user_id] = photo_msg
+                    _last_progress_update[user_id] = now
+                    return
             except Exception as e:
-                logger.debug(f"Failed to send sticker: {e}")
+                logger.debug(f"Failed to send photo: {e}")
 
-        #  Fallback: text message edit ─
+        #  Update progress ─
         try:
             _last_progress_update[user_id] = now
 
-            if _dashboard_is_photo.get(user_id, False):
-                # Photo dashboard - edit caption
+            is_photo = _dashboard_is_photo.get(user_id, False)
+            
+            if is_photo and photo_msg:
+                # Photo hai - caption edit karo (WZML style - image same, text update)
                 try:
-                    await message.edit_caption(text[:1024])
+                    await photo_msg.edit_caption(caption=text[:1024])
                     _photo_update_count[user_id] = _photo_update_count.get(user_id, 0) + 1
                     _progress_flood_until.pop(user_id, None)
                     return
                 except Exception as e:
                     logger.debug(f"Caption edit failed: {e}")
+                    # Fallback to text
+                    _dashboard_is_photo[user_id] = False
 
             # Text dashboard - edit text
             await message.edit_text(text)
