@@ -108,32 +108,40 @@ def ensure_images_folder():
     os.makedirs(folder, exist_ok=True)
     return folder
 
-async def download_photo_to_folder(photo, folder):
-    """Download photo from Telegram to local folder. Returns local path or None."""
+async def download_photo_to_folder(client, photo, folder):
+    """Download photo from Telegram to local folder. Returns local path or None.
+    photo can be: Photo object, Document object, or file_id string"""
     try:
-        # Get file extension - Telegram photos don't have file_name attribute
-        ext = 'jpg'  # Default extension
-        if hasattr(photo, 'file_name') and photo.file_name:
-            # Document with filename
-            ext = photo.file_name.split('.')[-1] if '.' in photo.file_name else 'jpg'
-        elif hasattr(photo, 'mime_type') and photo.mime_type:
-            # Get extension from mime type
+        # Get file extension
+        ext = 'jpg'  # Default
+        if hasattr(photo, 'mime_type') and photo.mime_type:
             if 'png' in photo.mime_type:
                 ext = 'png'
             elif 'webp' in photo.mime_type:
                 ext = 'webp'
             elif 'gif' in photo.mime_type:
                 ext = 'gif'
+        elif hasattr(photo, 'file_name') and photo.file_name:
+            ext = photo.file_name.split('.')[-1] if '.' in photo.file_name else 'jpg'
         
         # Generate unique filename
         timestamp = int(datetime.now().timestamp() * 1000)
         file_name = f"img_{timestamp}.{ext}"
-        
-        # Full path
         full_path = os.path.join(folder, file_name)
         
-        # Download
-        file_path = await photo.download(file_name=full_path)
+        # Get file_id
+        file_id = None
+        if isinstance(photo, str):
+            file_id = photo
+        elif hasattr(photo, 'file_id'):
+            file_id = photo.file_id
+        
+        if not file_id:
+            logger.error("No file_id found in photo object")
+            return None
+        
+        # Download using client
+        file_path = await client.download_media(file_id, file_name=full_path)
         
         # Verify file exists
         if file_path and os.path.exists(file_path):
@@ -581,7 +589,7 @@ async def set_progress_pic_from_photo(client: Client, message: Message):
         return
     
     # Download photo
-    file_path = await download_photo_to_folder(photo, folder)
+    file_path = await download_photo_to_folder(client, photo, folder)
     
     if not file_path:
         await message.reply_text(" Failed to download photo!")
@@ -626,7 +634,7 @@ async def set_start_pic_from_photo(client: Client, message: Message):
         await message.reply_text(" Please reply to a photo!")
         return
     
-    file_path = await download_photo_to_folder(photo, folder)
+    file_path = await download_photo_to_folder(client, photo, folder)
     
     if not file_path:
         await message.reply_text(" Failed to download photo!")
@@ -655,7 +663,7 @@ async def handle_photo_upload(client: Client, message: Message):
         # Auto-save as progress
         photo = message.photo if message.photo else message.document
         if photo and (not message.document or message.document.mime_type.startswith('image/')):
-            file_path = await download_photo_to_folder(photo, folder)
+            file_path = await download_photo_to_folder(client, photo, folder)
             if file_path:
                 images = get_progress_images()
                 images.append(file_path)
@@ -683,7 +691,7 @@ async def handle_photo_upload(client: Client, message: Message):
         # Auto-save as start pic
         photo = message.photo if message.photo else message.document
         if photo and (not message.document or message.document.mime_type.startswith('image/')):
-            file_path = await download_photo_to_folder(photo, folder)
+            file_path = await download_photo_to_folder(client, photo, folder)
             if file_path:
                 set_start_pic(file_path)
                 
@@ -752,7 +760,7 @@ async def handle_media_group(client: Client, message: Message):
             progress_msg = await message.reply_text(f" **Downloading {len(photos_to_save)} photos...**")
             
             for photo in photos_to_save:
-                file_path = await download_photo_to_folder(photo, folder)
+                file_path = await download_photo_to_folder(client, photo, folder)
                 if file_path:
                     images = get_progress_images()
                     images.append(file_path)
@@ -842,7 +850,7 @@ async def handle_save_callback(client: Client, callback_query):
         
         saved_count = 0
         for photo in photos_to_save:
-            file_path = await download_photo_to_folder(photo, folder)
+            file_path = await download_photo_to_folder(client, photo, folder)
             if file_path:
                 images = get_progress_images()
                 images.append(file_path)
@@ -869,7 +877,7 @@ async def handle_save_callback(client: Client, callback_query):
             await callback_query.answer(" No valid photo!", show_alert=True)
             return
         
-        file_path = await download_photo_to_folder(photo, folder)
+        file_path = await download_photo_to_folder(client, photo, folder)
         
         if not file_path:
             await callback_query.answer(" Failed to download!", show_alert=True)
