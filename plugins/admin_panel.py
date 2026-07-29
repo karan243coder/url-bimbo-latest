@@ -545,15 +545,21 @@ async def set_start_pic_from_photo(client: Client, message: Message):
     filters.private
 )
 async def handle_photo_upload(client: Client, message: Message):
-    """Handle direct photo upload - ask what to do with it"""
+    """Handle photo upload - show buttons to choose what to do"""
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(" Progress Header", callback_data="save_as_progress"),
+            InlineKeyboardButton(" Start Image", callback_data="save_as_start")
+        ],
+        [
+            InlineKeyboardButton(" Cancel", callback_data="cancel_photo")
+        ]
+    ])
+    
     await message.reply_text(
         " **Photo Received!**\n\n"
-        "Is image ko kya karna hai?\n"
-        "Reply me command daal ke batao:\n\n"
-        "  `/setprogresspic` - Progress header me add karo\n"
-        "  `/setstartpic` - Start image banao\n\n"
-        "**Ya multiple photos ek sath bhejo (album)**\n"
-        "Aur reply me `/setprogresspics` daalo - sab save ho jayenge!",
+        "Is image ko kya karna hai? Neeche button dabao:",
+        reply_markup=buttons,
         reply_to_message_id=message.id
     )
 
@@ -563,66 +569,120 @@ async def handle_photo_upload(client: Client, message: Message):
     filters.private
 )
 async def handle_media_group(client: Client, message: Message):
-    """Handle multiple photos (album) - save all as progress images"""
-    folder = ensure_images_folder()
+    """Handle multiple photos (album) - show buttons"""
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(" Progress Headers", callback_data="save_album_as_progress"),
+            InlineKeyboardButton(" Start Image", callback_data="save_as_start")
+        ],
+        [
+            InlineKeyboardButton(" Cancel", callback_data="cancel_photo")
+        ]
+    ])
     
-    # Collect all photos from the media group
-    photos = []
-    if message.media_group_id:
-        # Get all messages in this group
-        messages = await client.get_media_group(
-            chat_id=message.chat.id,
-            message_id=message.id
-        )
-        
-        for msg in messages:
-            if msg.photo:
-                photos.append(msg.photo)
-            elif msg.document and msg.document.mime_type.startswith('image/'):
-                photos.append(msg.document)
+    await message.reply_text(
+        " **Photos Received!**\n\n"
+        "Sab photos ko kya karna hai? Neeche button dabao:",
+        reply_markup=buttons,
+        reply_to_message_id=message.id
+    )
+
+@Client.on_callback_query(filters.regex("^(save_as_|save_album_|cancel_photo)"))
+async def handle_save_callback(client: Client, callback_query):
+    """Handle save button clicks"""
+    user_id = callback_query.from_user.id
     
-    if not photos:
+    if user_id != BIMBO_OWNER_ID:
+        await callback_query.answer(" Only admin can do this!", show_alert=True)
         return
     
-    # Download all photos
-    saved_count = 0
-    saved_files = []
+    # Get the replied message (photo)
+    replied = callback_query.message.reply_to_message
     
-    progress_msg = await message.reply_text(
-        f" **Processing {len(photos)} photos...**\n\n"
-        "Downloading..."
-    )
+    if not replied:
+        await callback_query.answer(" No photo found! Please send photo first.", show_alert=True)
+        return
     
-    for i, photo in enumerate(photos, 1):
-        file_path = await download_photo_to_folder(photo, folder)
-        if file_path:
-            saved_files.append(file_path)
-            saved_count += 1
+    folder = ensure_images_folder()
+    action = callback_query.data
+    
+    await callback_query.answer(" Processing...", show_alert=False)
+    
+    if action in ["save_as_progress", "save_album_as_progress"]:
+        # Save as progress images
+        photos_to_save = []
         
-        # Update progress
-        if i % 3 == 0 or i == len(photos):
-            try:
-                await progress_msg.edit_text(
-                    f" **Processing {len(photos)} photos...**\n\n"
-                    f" Downloaded: {i}/{len(photos)}"
+        if action == "save_as_progress":
+            # Single photo
+            if replied.photo:
+                photos_to_save.append(replied.photo)
+            elif replied.document and replied.document.mime_type.startswith('image/'):
+                photos_to_save.append(replied.document)
+        else:
+            # Album - get all photos
+            if replied.media_group_id:
+                messages = await client.get_media_group(
+                    chat_id=callback_query.message.chat.id,
+                    message_id=replied.id
                 )
-            except Exception:
-                pass
-    
-    if saved_count > 0:
-        # Add all to progress images
-        images = get_progress_images()
-        images.extend(saved_files)
-        set_progress_images(images)
+                for msg in messages:
+                    if msg.photo:
+                        photos_to_save.append(msg.photo)
+                    elif msg.document and msg.document.mime_type.startswith('image/'):
+                        photos_to_save.append(msg.document)
         
-        await progress_msg.edit_text(
-            f" **{saved_count} Photos Saved!**\n\n"
-            f" All added to progress images.\n"
-            f" Total: {len(images)} images\n\n"
-            f" Folder: `{folder}`"
+        if not photos_to_save:
+            await callback_query.answer(" No valid photos!", show_alert=True)
+            return
+        
+        saved_count = 0
+        for photo in photos_to_save:
+            file_path = await download_photo_to_folder(photo, folder)
+            if file_path:
+                images = get_progress_images()
+                images.append(file_path)
+                set_progress_images(images)
+                saved_count += 1
+        
+        await callback_query.message.edit_text(
+            f" **{saved_count} Progress Image(s) Added!**\n\n"
+            f" Total: {len(get_progress_images())} images\n\n"
+            f" Aur photos bhejo ya button dabao!"
         )
-    else:
-        await progress_msg.edit_text(" Failed to save any photos!")
+        
+        logger.info(f"Progress images saved: {saved_count}")
+    
+    elif action == "save_as_start":
+        # Save as start pic
+        photo = None
+        if replied.photo:
+            photo = replied.photo
+        elif replied.document and replied.document.mime_type.startswith('image/'):
+            photo = replied.document
+        
+        if not photo:
+            await callback_query.answer(" No valid photo!", show_alert=True)
+            return
+        
+        file_path = await download_photo_to_folder(photo, folder)
+        
+        if not file_path:
+            await callback_query.answer(" Failed to download!", show_alert=True)
+            return
+        
+        set_start_pic(file_path)
+        
+        await callback_query.message.edit_text(
+            f" **Start Image Set!**\n\n"
+            f" Saved: `{os.path.basename(file_path)}`"
+        )
+        
+        logger.info(f"Start image saved: {file_path}")
+    
+    elif action == "cancel_photo":
+        await callback_query.message.edit_text(" Cancelled!")
+        await asyncio.sleep(1)
+        await callback_query.message.delete()
 
 # ══════════════════════════════════════════════════════════
 #  TEXT COMMANDS
