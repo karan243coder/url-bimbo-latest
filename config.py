@@ -190,11 +190,25 @@ class Config(object):
     # Torrent Search (1337x/YTS mirror fallback)
     TORRENT_SEARCH_ENABLED = is_enabled(_str("TORRENT_SEARCH_ENABLED", "true"), True)
 
+    # ─────────────────────────────────────────────────────────
+    # qBittorrent Settings
+    # ──────────────────────────────────────────────────────────
+    QB_URL = _str("QB_URL", "http://localhost:8090")  # qBittorrent Web UI URL
+    QB_USERNAME = _str("QB_USERNAME", "admin")  # qBittorrent username
+    QB_PASSWORD = _str("QB_PASSWORD", "adminadmin")  # qBittorrent password
+    QB_ENABLED = is_enabled(_str("QB_ENABLED", "false"), False)  # Enable qBittorrent
+
     # Maintenance mode
     MAINTENANCE_MODE = is_enabled(_str("MAINTENANCE_MODE", "false"), False)
 
     # Custom start media
     BIMBO_START_PIC = _str("BIMBO_START_PIC", "")  # telegra.ph image link or file_id
+    
+    # Progress Dashboard Header Image (Telegraph/IMGUR link or local path)
+    # Agar multiple images chahiye to comma-separated list do:
+    # "https://telegra.ph/file/xxx.jpg,https://telegra.ph/file/yyy.jpg"
+    # Ya local folder: "images/" (us folder se random image pick karega)
+    BIMBO_PROGRESS_PIC = _str("BIMBO_PROGRESS_PIC", "")
     BIMBO_START_MSG = _str("BIMBO_START_MSG", "")  # override default start text
 
     # Auto-delete user messages (bot responses after N seconds in private)
