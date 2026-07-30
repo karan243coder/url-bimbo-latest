@@ -4,6 +4,7 @@
 # Support: @Bimbo69
 
 import os
+import asyncio
 import random
 import logging
 from PIL import Image, ImageOps
