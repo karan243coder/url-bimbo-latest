@@ -272,6 +272,12 @@ def extract(url: str, cookies_file: str = None):
         except Exception:
             pass
 
+    # Extract thumbnail from og:image
+    thumbnail = None
+    thumb_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+    if thumb_match:
+        thumbnail = thumb_match.group(1).strip()
+
     # --- Step 4: Find hash — try main page first ---
     vid_hash = _find_hash(html) if html else None
 
@@ -411,6 +417,7 @@ def extract(url: str, cookies_file: str = None):
     return {
         "title": _clean_title(title, desktop),
         "duration": duration,
+        "thumbnail": thumbnail,
         "webpage_url": desktop,
         "master_m3u8": qualities[0]["url"],
         "qualities": qualities,
