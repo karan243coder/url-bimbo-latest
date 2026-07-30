@@ -774,12 +774,19 @@ async def update_user_progress(client, user_id, force=False):
         if photo_msg is None and not _dashboard_is_photo.get(user_id, False):
             # No photo yet - send photo with caption
             try:
+                old_msg = _task_messages.get(user_id)
                 photo_msg = await _send_progress_with_caption(client, user_id, text, reply_to_msg_id=None)
                 if photo_msg:
                     _user_sticker_msg[user_id] = photo_msg
                     _dashboard_is_photo[user_id] = True
                     _task_messages[user_id] = photo_msg
                     _last_progress_update[user_id] = now
+                    # Auto-clean the initial "Starting Download..." text message so chat remains 100% silent & clean!
+                    if old_msg and getattr(old_msg, "id", None) != getattr(photo_msg, "id", None):
+                        try:
+                            await old_msg.delete()
+                        except Exception:
+                            pass
                     return
             except Exception as e:
                 logger.debug(f"Failed to send photo: {e}")
