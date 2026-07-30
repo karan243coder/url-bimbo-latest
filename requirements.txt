@@ -23,6 +23,9 @@ hachoir==3.3.0
 
 libtorrent==2.0.11
 
+# Torrent (qBittorrent)
+qbittorrent-api>=2024.1.0
+
 # HTML / Parsing
 beautifulsoup4>=4.12.3
 lxml>=5.2.2
