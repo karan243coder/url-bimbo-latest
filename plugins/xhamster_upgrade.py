@@ -153,43 +153,65 @@ async def _xh_get(session: aiohttp.ClientSession, url: str, referer=None, try_en
     code, body, final_url = await _fetch(url)
 
     # If we got a non-2xx response on a creator/pornstar/channel/user URL,
-    # try adding standard listing suffixes.
+    # try adding standard listing suffixes across sections and mirror domains.
     if try_endpoint_fallback and (code == 0 or code >= 400):
         p = urlparse(url)
         path_parts = [s for s in p.path.rstrip("/").split("/") if s]
         if not path_parts:
             return code, body, final_url
+
         last_seg = path_parts[-1].lower()
         creator_sections = {"creators", "users", "pornstars", "channels", "models", "pornstar-channels"}
 
-        # Case 1: URL ends with a section name (e.g., /creators/xxx/videos) -> try alternate listing endpoints
-        possible_tries = []
-        if last_seg in ("videos", "videos-porn", "new-videos", "videos-premium", "popular"):
-            # xHamster mirrors do not expose the same endpoint consistently.
-            # Try the profile root as well as all known listing suffixes.
-            root_url = "/".join(url.rstrip("/").split("/")[:-1])
-            possible_tries.append(root_url)
-            alt_list = ["videos", "videos-porn", "new-videos", "popular"]
-            for alt_seg in alt_list:
-                if alt_seg != last_seg:
-                    possible_tries.append(root_url + f"/{alt_seg}")
-        elif len(path_parts) >= 2 and path_parts[-2].lower() in creator_sections:
-            # Case 2: URL is profile root (e.g., /creators/xxx, no /videos suffix) -> try all listing endpoints
-            username = last_seg
+        username = None
+        section = None
+        for i, part in enumerate(path_parts):
+            if part.lower() in creator_sections and i + 1 < len(path_parts):
+                section = part.lower()
+                username = path_parts[i + 1]
+                break
+        if not username and len(path_parts) >= 2 and path_parts[-2].lower() in creator_sections:
             section = path_parts[-2].lower()
-            if section in ("pornstar-channels",):
-                section = "channels"
-            for seg in ("videos", "videos-porn", "new-videos", "popular"):
-                possible_tries.append(f"{p.scheme}://{p.netloc}/{section}/{username}/{seg}")
+            username = path_parts[-1]
 
-        # Try each candidate URL
+        possible_tries = []
+        mirrors_to_try = []
+        seen_hosts = set()
+        for hst in [p.netloc, "xhamster46.desi", "xhamster.com", "xhamster.desi", "xhamster19.desi", "xhamster.one"]:
+            if hst and hst not in seen_hosts:
+                seen_hosts.add(hst)
+                mirrors_to_try.append(hst)
+
+        if username and section:
+            sections_to_try = [section]
+            for sec in ("creators", "channels", "pornstars", "users", "models"):
+                if sec not in sections_to_try:
+                    sections_to_try.append(sec)
+
+            for hst in mirrors_to_try:
+                for sec in sections_to_try:
+                    for sfx in ("videos", "", "videos-porn", "new-videos", "popular"):
+                        sfx_path = f"/{sfx}" if sfx else ""
+                        cand = f"{p.scheme or 'https'}://{hst}/{sec}/{username}{sfx_path}"
+                        if cand != url and cand not in possible_tries:
+                            possible_tries.append(cand)
+        else:
+            for hst in mirrors_to_try:
+                cand = f"{p.scheme or 'https'}://{hst}{p.path}"
+                if p.query:
+                    cand += "?" + p.query
+                if cand != url and cand not in possible_tries:
+                    possible_tries.append(cand)
+
         for alt_url in possible_tries:
-            logger.info(f"xh endpoint fallback: {code} on {url[:90]} -> trying {alt_url[:100]}")
+            logger.info("xh endpoint fallback: %s on %s -> trying %s", code, url[:90], alt_url[:100])
             try:
                 code2, body2, final2 = await _fetch(alt_url)
                 if code2 == 200:
+                    logger.info("xh endpoint fallback RESOLVED 200: %s", alt_url[:100])
                     return code2, body2, final2
-                code, body, final_url = code2, body2, final2
+                if code2 > 0 and code2 < 400:
+                    code, body, final_url = code2, body2, final2
             except Exception:
                 continue
 
