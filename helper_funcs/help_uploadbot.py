@@ -9,6 +9,7 @@ logging.basicConfig(level=logging.DEBUG,
 logger = logging.getLogger(__name__)
 
 import os
+import time
 import requests
 
 def DetectFileSize(url):
