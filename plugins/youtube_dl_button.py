@@ -2155,17 +2155,34 @@ async def terabox_call_back(bot, update):
         # Parse callback data: terabox=type|task_id
         cb_data = update.data
         parts = cb_data.split("|")
-        tg_send_type = parts[0].split("=")[1]  # video, file, or audio
+        tg_send_type = parts[0].split("=", 1)[1]  # video, file, or audio
         task_id = parts[1] if len(parts) > 1 else ""
-        
-        if not url:
-            # Try to get URL from JSON file (old method compatibility)
-            save_ytdl_json_path = os.path.join(Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}.json")
-            if os.path.exists(save_ytdl_json_path):
+
+        # The preview handler stores a separate JSON file per task. The old
+        # callback used an undefined `url`, so every button press crashed.
+        url = ""
+        save_ytdl_json_path = os.path.join(
+            Config.BIMBO_DOWNLOAD_LOCATION,
+            f"{update.from_user.id}_{task_id}.json"
+        )
+        if os.path.exists(save_ytdl_json_path):
+            try:
                 with open(save_ytdl_json_path, "r", encoding="utf8") as f:
                     tb_json = json.load(f)
                 url = tb_json.get("tb_share_url", "")
-        
+            except (OSError, ValueError) as exc:
+                logger.warning("Could not read TeraBox task %s: %s", task_id, exc)
+
+        # Compatibility with previews created by older versions.
+        if not url:
+            legacy_path = os.path.join(Config.BIMBO_DOWNLOAD_LOCATION, f"{update.from_user.id}.json")
+            if os.path.exists(legacy_path):
+                try:
+                    with open(legacy_path, "r", encoding="utf8") as f:
+                        url = json.load(f).get("tb_share_url", "")
+                except (OSError, ValueError):
+                    pass
+
         if not url:
             await update.message.edit("❌ Invalid Terabox session. Please send the link again.")
             return
@@ -2182,8 +2199,9 @@ async def terabox_call_back(bot, update):
         # Import terabox engine
         from plugins.terabox_engine import extract_terabox_info, download_terabox_file
         
-        # Extract file info
-        file_info = extract_terabox_info(url)
+        # Resolver/network work is blocking; keep Pyrogram's event loop free.
+        loop = asyncio.get_running_loop()
+        file_info = await loop.run_in_executor(None, extract_terabox_info, url)
         
         if not file_info or not file_info.get('success'):
             error_msg = file_info.get('error', 'Unknown error') if file_info else 'Failed to extract info'
@@ -2215,9 +2233,9 @@ async def terabox_call_back(bot, update):
                     f"Failed to extract file info:\n"
                     f"`{escape_html(error_msg[:200])}`\n\n"
                     "This might be due to:\n"
-                    "• Invalid or expired link\n"
-                    "• Invalid cookie configuration\n"
-                    "• Terabox API issues\n"
+                    "• Invalid, private, or expired link\n"
+                    "• Cookie-less resolver temporarily unavailable\n"
+                    "• Resolver API quota/rate limit\n"
                     "• File not accessible"
                 )
             
@@ -2247,8 +2265,10 @@ async def terabox_call_back(bot, update):
         tmp_directory = os.path.join(Config.BIMBO_DOWNLOAD_LOCATION, str(update.from_user.id))
         os.makedirs(tmp_directory, exist_ok=True)
         
-        terabox_instance = file_info.get('teraboxdl_instance')
-        file_path = download_terabox_file(terabox_instance, file_info, tmp_directory)
+        # Cookie-less direct/HLS download, performed outside the event loop.
+        file_path = await loop.run_in_executor(
+            None, download_terabox_file, None, file_info, tmp_directory
+        )
         
         if not file_path or not os.path.exists(file_path):
             await update.message.edit(
