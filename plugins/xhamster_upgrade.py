@@ -899,7 +899,13 @@ async def _send_listing(client: Client, m: Message, url: str, title: str = "🔞
             await msg.edit_text(text, reply_markup=_listing_kbd(token, items, bool(next_page), current_page=1, sort_mode="long", kind=_LISTING_STORE[token].get("kind", "channel")))
     except Exception as e:
         logger.exception("xh listing")
-        await msg.edit_text(f"❌ Error: <code>{e}</code>")
+        try:
+            await msg.edit_text(f"❌ Error: <code>{e}</code>")
+        except Exception:
+            try:
+                await m.reply_text(f"❌ Error: <code>{e}</code>")
+            except Exception:
+                pass
 
 
 def _store_listing(items, next_page, title="🔞 xHamster", current_url="", prev_url=""):
