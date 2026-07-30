@@ -787,11 +787,21 @@ async def echo(bot, update):
                     return False
                 except Exception as _e:
                     logger.warning(f"xh auto-list err: {_e}")
-                    await imog.edit(
-                        "<b>🔞 xHamster non-video link</b>\n\n"
-                        "Use <code>/xh link</code> for auto-detect.",
-                        parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True,
-                    )
+                    try:
+                        await imog.edit(
+                            "<b>🔞 xHamster non-video link</b>\n\n"
+                            "Use <code>/xh link</code> for auto-detect.",
+                            parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True,
+                        )
+                    except Exception:
+                        try:
+                            await update.reply_text(
+                                "<b>🔞 xHamster non-video link</b>\n\n"
+                                "Use <code>/xh link</code> for auto-detect.",
+                                parse_mode=enums.ParseMode.HTML, disable_web_page_preview=True,
+                            )
+                        except Exception:
+                            pass
                     return False
             else:
                 await imog.edit(
