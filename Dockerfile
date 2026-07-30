@@ -1,9 +1,10 @@
 FROM python:3.11-slim
 
-# System dependencies — ffmpeg + aria2 + fonts (for watermark drawtext) + procps (pkill)
+# System dependencies — ffmpeg + aria2 + qBittorrent + fonts + procps
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     aria2 \
+    qbittorrent-nox \
     curl \
     wget \
     procps \
