@@ -1183,6 +1183,13 @@ async def youtube_dl_call_back(bot, update, priority=100):
     progress_msg_id = progress_msg.id
     await update_user_progress(bot, update.from_user.id, force=True)
 
+    # Auto-clean original quality button message so only the progress dashboard remains on screen!
+    if update.message and getattr(update.message, "id", None) and update.message.id != progress_msg_id:
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+
     # Enter the global fair download stage (2 slots for the whole bot).
     pipeline_site = "xhamster" if is_xh_engine else ("eporner" if is_ep_engine else "yt-dlp")
     download_stage_ctx = stage_slot(
