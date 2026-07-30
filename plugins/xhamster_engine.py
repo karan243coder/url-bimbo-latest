@@ -704,6 +704,13 @@ def _extract_from_html(html, page_url, cookie_header=None, ua=None, session=None
 
     title = None
     duration = None
+    thumbnail = None
+    
+    # Extract thumbnail from og:image
+    thumb_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+    if thumb_match:
+        thumbnail = thumb_match.group(1).strip()
+    
     initials = _extract_window_initials(html)
     if isinstance(initials, dict):
         vm = initials.get("videoModel")
@@ -773,6 +780,7 @@ def _extract_from_html(html, page_url, cookie_header=None, ua=None, session=None
     return {
         "title": _clean_title(title, page_url),
         "duration": duration,
+        "thumbnail": thumbnail,
         "webpage_url": page_url,
         "base": base,
         "master_m3u8": master,
