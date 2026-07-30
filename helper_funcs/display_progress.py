@@ -78,6 +78,7 @@ def register_task(task_id, user_id, filename="Unknown", total_size=0,
     if task_id in _task_store:
         return _task_store[task_id]
 
+    now = time.time()
     task = {
         'id': task_id,
         'user_id': user_id,
@@ -91,14 +92,14 @@ def register_task(task_id, user_id, filename="Unknown", total_size=0,
         'task_type': task_type,   # download, upload
         'engine': engine,
         'source_url': source_url,
-        'start_time': time.time(),
+        'start_time': now,
         'eta': 0,
         'elapsed': 0,
         'error': None,
         'detail': '',
         'completed': False,
         'speed_samples': [],
-        'last_update': time.time(),
+        'last_update': now,
         'cancel_flag': False,
     }
     
@@ -108,6 +109,9 @@ def register_task(task_id, user_id, filename="Unknown", total_size=0,
         _user_tasks[user_id] = []
     if task_id not in _user_tasks[user_id]:
         _user_tasks[user_id].append(task_id)
+    
+    # Track task start time for timeout
+    _task_start_time[user_id] = now
     
     return task
 
@@ -329,6 +333,8 @@ async def finalize_user_progress(client, user_id, message=None, delete_if_idle=T
             pipeline_pending = get_pipeline_stats(user_id).get('total_pending', 0)
         except Exception:
             pass
+        
+        # If there are still active tasks, just update the message
         if active or pipeline_pending:
             if current is not None:
                 try:
@@ -347,24 +353,32 @@ async def finalize_user_progress(client, user_id, message=None, delete_if_idle=T
                         logger.debug("Final progress refresh skipped: %s", exc)
             return False
 
+        # No active tasks - clean up and delete
         if current is None:
             _dashboard_is_photo.pop(user_id, None)
             _photo_update_count.pop(user_id, None)
             _user_sticker_msg.pop(user_id, None)
             return True
 
+        # Clear all tracking
         _task_messages.pop(user_id, None)
         _last_progress_update.pop(user_id, None)
         _progress_flood_until.pop(user_id, None)
         _dashboard_is_photo.pop(user_id, None)
         _photo_update_count.pop(user_id, None)
-        # Clear sticker tracking (auto_cleaner will delete the sticker)
         _user_sticker_msg.pop(user_id, None)
+        
         if delete_if_idle:
             try:
                 await current.delete()
+                logger.info(f"Progress dashboard deleted for user {user_id}")
             except Exception as exc:
-                logger.debug("Could not delete finished progress dashboard: %s", exc)
+                logger.debug(f"Could not delete finished progress dashboard: {exc}")
+                # Fallback: try to edit with completion message
+                try:
+                    await current.edit_text("✅ Task Complete!\n\n_Message will auto-delete in 10 seconds_")
+                except Exception:
+                    pass
         return True
 
 
@@ -673,6 +687,7 @@ _progress_flood_until = {}   # user_id -> hard Telegram cooldown timestamp
 _dashboard_is_photo = {}     # user_id -> True if current dashboard is a photo
 _photo_update_count = {}     # user_id -> count of photo updates
 _user_sticker_msg = {}       # user_id -> sticker message (kept for entire task)
+_task_start_time = {}        # user_id -> timestamp when task started (for timeout)
 _user_header_image = {}      # user_id -> current header image (kept for entire task)
 
 def _get_random_header_image():
@@ -837,6 +852,38 @@ def cleanup_progress_state(msg_id):
     speed_history.pop(msg_id, None)
     last_edit_time.pop(msg_id, None)
     last_progress_text.pop(msg_id, None)
+
+
+async def cleanup_stuck_tasks(client, max_age_seconds=300):
+    """Delete progress messages for tasks that are stuck (older than max_age_seconds)"""
+    now = time.time()
+    to_cleanup = []
+    
+    for user_id, start_time in list(_task_start_time.items()):
+        if now - start_time > max_age_seconds:
+            # Task is too old - might be stuck
+            active = get_user_active_tasks(user_id)
+            if not active:
+                # No active tasks but dashboard still exists - delete it
+                to_cleanup.append(user_id)
+    
+    for user_id in to_cleanup:
+        current = _task_messages.get(user_id)
+        if current:
+            try:
+                await current.delete()
+                logger.info(f"Cleaned up stuck progress message for user {user_id}")
+            except Exception as e:
+                logger.debug(f"Failed to cleanup stuck message: {e}")
+        
+        # Clear all tracking
+        _task_messages.pop(user_id, None)
+        _last_progress_update.pop(user_id, None)
+        _progress_flood_until.pop(user_id, None)
+        _dashboard_is_photo.pop(user_id, None)
+        _photo_update_count.pop(user_id, None)
+        _user_sticker_msg.pop(user_id, None)
+        _task_start_time.pop(user_id, None)
 
 
 async def progress_for_pyrogram(current, total, ud_type, message, start,
