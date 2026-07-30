@@ -46,6 +46,11 @@ async def init_qbittorrent():
         logger.info("qBittorrent is disabled")
         return False
     
+    from urllib.parse import urlparse
+    if urlparse(Config.QB_URL).port == 8080 or str(Config.QB_URL).strip().endswith(":8080") or str(Config.QB_URL).strip().endswith(":8080/"):
+        logger.warning("Config.QB_URL 8080 conflicts with Stream Server! Overriding to http://localhost:8090")
+        Config.QB_URL = "http://localhost:8090"
+    
     try:
         import qbittorrentapi as qba
         
@@ -56,8 +61,17 @@ async def init_qbittorrent():
             VERIFY_WEBUI_CERTIFICATE=False
         )
         
-        # Test connection
-        qb_client.auth_log_in()
+        # Test connection with retry loop for daemon startup
+        for attempt in range(1, 10):
+            try:
+                qb_client.auth_log_in()
+                break
+            except Exception as login_err:
+                if attempt == 9:
+                    raise login_err
+                logger.info(f"Waiting for qBittorrent-nox WebUI (attempt {attempt}/9)...")
+                await asyncio.sleep(2)
+        
         qb_client.app_version()
         
         QB_ENABLED = True
@@ -88,15 +102,41 @@ async def start_qbittorrent_daemon():
             logger.info("qBittorrent daemon already running")
             return True
         
-        # Create config directory
+        # Create config directory and write pre-configured qBittorrent.conf
         qb_config_dir = Path.home() / '.config' / 'qBittorrent'
         qb_config_dir.mkdir(parents=True, exist_ok=True)
+        conf_content = """[LegalNotice]
+Accepted=true
+
+[Preferences]
+WebUI\\Address=*
+WebUI\\Port=8090
+WebUI\\Username=admin
+WebUI\\Password_PBKDF2="@ByteArray(ARQ77eY1NUZaQsuDHbIMCA==:0WmrkYTUWIC9wGtvHzXcFMttYD5g2pT0m/JbbdAt+50J6zZc4K150tXhLwL/K8xVzJd06B0m4Vz22fB6lD1iug==)"
+WebUI\\LocalHostAuth=false
+WebUI\\AuthSubnetWhitelistEnabled=true
+WebUI\\AuthSubnetWhitelist=127.0.0.1/32, ::1/128, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+"""
+        try:
+            (qb_config_dir / 'qBittorrent.conf').write_text(conf_content, encoding="utf-8")
+            sub_dir = qb_config_dir / 'qBittorrent'
+            sub_dir.mkdir(parents=True, exist_ok=True)
+            (sub_dir / 'qBittorrent.conf').write_text(conf_content, encoding="utf-8")
+        except Exception as conf_err:
+            logger.debug(f"Could not pre-write qBittorrent config: {conf_err}")
+        
+        from urllib.parse import urlparse
+        qb_port = urlparse(Config.QB_URL).port or 8090
+        if qb_port == 8080 or str(Config.QB_URL).strip().endswith(":8080") or str(Config.QB_URL).strip().endswith(":8080/"):
+            logger.warning("Config.QB_URL is set to port 8080, which conflicts with Stream Server! Forcing qBittorrent to port 8090.")
+            qb_port = 8090
+            Config.QB_URL = "http://localhost:8090"
         
         # Start daemon
         cmd = [
             'qbittorrent-nox',
             '--profile=' + str(qb_config_dir),
-            '--webui-port=8090'
+            f'--webui-port={qb_port}'
         ]
         
         subprocess.Popen(cmd, 
