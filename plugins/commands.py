@@ -155,16 +155,49 @@ async def start_cmd(client: Client, m: Message):
         ],
     ])
 
-    if Config.BIMBO_START_PIC:
-        pic = Config.BIMBO_START_PIC
+    # Try to get start image from multiple sources (priority order):
+    # 1. Admin panel start pic
+    # 2. Config BIMBO_START_PIC
+    # 3. Random from progress images folder
+    start_pic = None
+    
+    # Check admin panel start pic first
+    try:
+        from plugins.admin_panel import get_start_pic as _get_start_pic
+        admin_start = _get_start_pic()
+        if admin_start and os.path.exists(admin_start):
+            start_pic = admin_start
+            logger.info(f"Using admin panel start pic: {start_pic}")
+    except Exception as e:
+        logger.debug(f"Admin start pic check failed: {e}")
+    
+    # Then check Config
+    if not start_pic and Config.BIMBO_START_PIC:
+        start_pic = Config.BIMBO_START_PIC
+        logger.info(f"Using config start pic: {start_pic}")
+    
+    # Fall back to random image from images/ folder
+    if not start_pic:
         try:
-            await client.send_photo(m.chat.id, pic, caption=start_text,
+            from plugins.admin_panel import get_random_progress_image
+            start_pic = get_random_progress_image()
+            if start_pic:
+                logger.info(f"Using random progress image as start pic: {start_pic}")
+        except Exception as e:
+            logger.debug(f"Random image fallback failed: {e}")
+    
+    # Send photo if we have one
+    if start_pic:
+        try:
+            await client.send_photo(m.chat.id, start_pic, caption=start_text,
                                     parse_mode=enums.ParseMode.HTML,
                                     reply_markup=buttons,
                                     reply_to_message_id=m.id)
             return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Start photo failed: {e}")
+    
+    # Fallback: text only
     await m.reply_text(start_text, parse_mode=enums.ParseMode.HTML,
                        reply_markup=buttons, disable_web_page_preview=True,
                        reply_to_message_id=m.id)
