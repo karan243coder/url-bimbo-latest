@@ -1202,6 +1202,11 @@ async def youtube_dl_call_back(bot, update, priority=100):
             await download_stage_ctx.__aexit__(None, None, None)
             download_stage_acquired = False
         remove_task(progress_task_id)
+        # Delete the "Starting Download" message
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
         await safe_edit(update.message, "**ERROR:** `yt-dlp` install nahi hai. Requirements install/deploy dobara karo.")
         await finalize_user_progress(bot, update.from_user.id, progress_msg)
         return
@@ -1210,6 +1215,11 @@ async def youtube_dl_call_back(bot, update, priority=100):
             await download_stage_ctx.__aexit__(None, None, None)
             download_stage_acquired = False
         remove_task(progress_task_id)
+        # Delete the "Starting Download" message on error
+        try:
+            await progress_msg.delete()
+        except Exception:
+            pass
         await finalize_user_progress(bot, update.from_user.id, progress_msg)
         raise
 
