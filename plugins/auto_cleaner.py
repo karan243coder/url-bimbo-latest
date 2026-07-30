@@ -67,10 +67,20 @@ def _has_keyboard(reply_markup) -> bool:
         return False
 
 def _is_success(text: str) -> bool:
-    return bool(text and "✅" in text[:80])
+    """Check if message is a success/completion message"""
+    if not text:
+        return False
+    success_keywords = ["✅", "complete", "finished", "done", "success", "uploaded", "downloaded"]
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in success_keywords)
 
 def _is_error(text: str) -> bool:
-    return bool(text and (text.startswith("❌") or text.startswith("⚠️")))
+    """Check if message is an error/failed message"""
+    if not text:
+        return False
+    error_keywords = ["❌", "️", "failed", "error", "timeout", "expired"]
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in error_keywords)
 
 def _is_command_photo(m: Message, text: str) -> bool:
     """Kya ye photo /start /help jaise command ka reply hai?"""
@@ -79,14 +89,14 @@ def _is_command_photo(m: Message, text: str) -> bool:
 
 def _is_media_message(m: Message) -> bool:
     """FINAL UPLOADED MEDIA — keep forever.
-    Video / Document / Audio -> always protect
+    Video / Document / Audio / Sticker -> always protect
     Photo -> protect, EXCEPT command reply photos (/start, /help etc)
     """
     if not m.media:
         return False
     
-    # Video / Doc / Audio -> always keep
-    if getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "audio", None) or getattr(m, "voice", None) or getattr(m, "animation", None):
+    # Video / Doc / Audio / Sticker / Animation -> always keep
+    if getattr(m, "video", None) or getattr(m, "document", None) or getattr(m, "audio", None) or getattr(m, "voice", None) or getattr(m, "animation", None) or getattr(m, "sticker", None):
         return True
     
     # Photo handling – screenshot safe
@@ -168,13 +178,14 @@ async def track_bot_message(client: Client, m: Message):
         text = getattr(m, "text", None) or getattr(m, "caption", "") or ""
         reply_markup = getattr(m, "reply_markup", None)
 
-        # 1. Final media -> PERMANENT (screenshots included)
-        if _is_media_message(m):
-            await _mark_perm(m); return
-
-        # 2. Active progress -> keep
+        # 1. Active progress -> keep (check FIRST before media!)
+        # Photo+caption wala progress bhi yahan catch hoga
         if _is_progress(text):
             await _invalidate(m); return
+
+        # 2. Final media -> PERMANENT (screenshots included)
+        if _is_media_message(m):
+            await _mark_perm(m); return
 
         # 3. Success / Error / Menu / Text -> 10 sec
         if _is_success(text):
