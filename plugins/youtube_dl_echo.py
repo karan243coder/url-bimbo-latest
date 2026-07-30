@@ -39,39 +39,10 @@ from plugins.wowxxx_engine import is_wowxxx as _wx_is, extract_video_info as wow
 from plugins.xhand_engine import is_xhand as _xh2_is, extract_video_info as xhand_extract
 from plugins.bang_engine import is_bang as _bg_is, extract_video_info as bang_extract
 from plugins.stickers import send_sticker as _send_sticker
-from plugins.thumbnail_helper import send_with_thumbnail_or_text, check_cleanup
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Thumbnail helper functions
-# ─────────────────────────────────────────────────────────────────────────────
-
-async def send_quality_buttons_with_thumbnail(bot, chat_id, caption, reply_markup, reply_to, thumbnail_url=None):
-    """
-    Send quality selection buttons with optional thumbnail.
-    Uses thumbnail if available, otherwise falls back to text.
-    """
-    # Check cleanup periodically
-    check_cleanup()
-    
-    if thumbnail_url:
-        # Try to send with thumbnail
-        await send_with_thumbnail_or_text(
-            bot, chat_id, thumbnail_url, caption, reply_markup, reply_to
-        )
-    else:
-        # No thumbnail, send text only
-        await bot.send_message(
-            chat_id=chat_id,
-            text=caption,
-            reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML,
-            reply_to_message_id=reply_to,
-            disable_web_page_preview=True
-        )
 
 def generate_task_id(user_id: int) -> str:
     """Generate unique task ID for each download"""
@@ -579,6 +550,102 @@ def extract_url_parts(text, entities):
     return url, file_name, youtube_dl_username, youtube_dl_password
 
 
+def get_thumb_from_ytdl_json(rjson):
+    if not isinstance(rjson, dict):
+        return None
+    t = rjson.get("thumbnail")
+    if t and isinstance(t, str) and t.startswith("http"):
+        return t
+    thumbs = rjson.get("thumbnails")
+    if isinstance(thumbs, list) and thumbs:
+        for item in reversed(thumbs):
+            if isinstance(item, dict) and item.get("url") and str(item.get("url")).startswith("http"):
+                return item.get("url")
+    return None
+
+
+async def send_buttons_with_thumbnail(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup,
+    thumb_url: str = None,
+    reply_to_message_id: int = None,
+    referer: str = None,
+):
+    """
+    Safely send quality/format buttons along with the REAL thumbnail of the link.
+    Engineered for Koyeb (512 MB RAM):
+    1. First tries zero-RAM direct URL photo sending via Telegram servers.
+    2. If CDN requires headers/Referer or blocks direct send, downloads lightweight thumbnail (<2 MB)
+       to temporary storage, sends it, and removes the temp file immediately.
+    3. 100% crash-proof: falls back to regular text message if anything fails.
+    """
+    if thumb_url and isinstance(thumb_url, str) and thumb_url.startswith(("http://", "https://")):
+        # Tier 1: Try sending direct URL via Telegram servers (0 MB RAM used)
+        try:
+            return await bot.send_photo(
+                chat_id=chat_id,
+                photo=thumb_url,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode=enums.ParseMode.HTML,
+                reply_to_message_id=reply_to_message_id,
+            )
+        except Exception as e1:
+            logger.debug("Direct send_photo failed (%s), trying lightweight download fallback...", e1)
+            # Tier 2: Download lightweight thumbnail (< 3 MB) with Referer/headers
+            tmp_thumb = None
+            try:
+                import tempfile
+                import aiohttp
+
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36",
+                }
+                if referer:
+                    headers["Referer"] = referer
+
+                timeout = aiohttp.ClientTimeout(total=8)
+                async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+                    async with session.get(thumb_url, allow_redirects=True) as resp:
+                        if resp.status == 200:
+                            content = await resp.read()
+                            if 100 < len(content) <= 3 * 1024 * 1024:
+                                fd, tmp_thumb = tempfile.mkstemp(suffix=".jpg")
+                                os.close(fd)
+                                with open(tmp_thumb, "wb") as f:
+                                    f.write(content)
+                                result = await bot.send_photo(
+                                    chat_id=chat_id,
+                                    photo=tmp_thumb,
+                                    caption=text,
+                                    reply_markup=reply_markup,
+                                    parse_mode=enums.ParseMode.HTML,
+                                    reply_to_message_id=reply_to_message_id,
+                                )
+                                return result
+            except Exception as e2:
+                logger.debug("Lightweight thumb download/send failed: %s", e2)
+            finally:
+                if tmp_thumb and os.path.exists(tmp_thumb):
+                    try:
+                        os.remove(tmp_thumb)
+                    except Exception:
+                        pass
+
+    # Tier 3: 100% reliable fallback (normal text message)
+    return await bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=enums.ParseMode.HTML,
+        reply_to_message_id=reply_to_message_id,
+    )
+
+
 @BimboBot.on_message(filters.private & ~filters.via_bot & filters.regex(pattern=".*http.*"))
 async def echo(bot, update):
     # Skip torrent/magnet links — handled by torrent_download.py
@@ -769,19 +836,21 @@ async def echo(bot, update):
 
             reply_markup = build_xhamster_keyboard_from_engine(xh, task_id)
             await imog.delete(True)
-            
-            # Get thumbnail from engine response
-            thumbnail_url = xh.get('thumbnail') or xh.get('thumb')
-            
-            caption = (
-                "<b>🎯 Choose quality</b>\n"
-                "<b>✅ xHamster custom engine active</b>\n\n"
-                "Send a photo now to set a custom thumbnail.\n"
-                "Use /delthumbnail to remove a saved thumbnail."
-            )
-            
-            await send_quality_buttons_with_thumbnail(
-                bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+            thumb_url = xh.get("thumbnail") or xh.get("thumb")
+            await send_buttons_with_thumbnail(
+                bot=bot,
+                chat_id=update.chat.id,
+                text=(
+                    "<b>🎯 Choose quality</b>\n"
+                    "<b>✅ xHamster custom engine active</b>\n\n"
+                    f"<b>📹 Title:</b> <code>{escape_html(str(xh.get('title', 'Video'))[:100])}</code>\n\n"
+                    "Send a photo now to set a custom thumbnail.\n"
+                    "Use /delthumbnail to remove a saved thumbnail."
+                ),
+                reply_markup=reply_markup,
+                thumb_url=thumb_url,
+                reply_to_message_id=update.id,
+                referer=url,
             )
             return
 
@@ -873,19 +942,21 @@ async def echo(bot, update):
 
             reply_markup = build_eporner_keyboard_from_engine(ep, task_id)
             await imog.delete(True)
-            
-            # Get thumbnail from engine response
-            thumbnail_url = ep.get('thumbnail') or ep.get('thumb')
-            
-            caption = (
-                "<b>🎯 Choose quality</b>\n"
-                "<b>✅ Eporner custom engine active</b>\n\n"
-                "Send a photo now to set a custom thumbnail.\n"
-                "Use /delthumbnail to remove a saved thumbnail."
-            )
-            
-            await send_quality_buttons_with_thumbnail(
-                bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+            thumb_url = ep.get("thumbnail") or ep.get("thumb")
+            await send_buttons_with_thumbnail(
+                bot=bot,
+                chat_id=update.chat.id,
+                text=(
+                    "<b>🎯 Choose quality</b>\n"
+                    "<b>✅ Eporner custom engine active</b>\n\n"
+                    f"<b>📹 Title:</b> <code>{escape_html(str(ep.get('title', 'Video'))[:100])}</code>\n\n"
+                    "Send a photo now to set a custom thumbnail.\n"
+                    "Use /delthumbnail to remove a saved thumbnail."
+                ),
+                reply_markup=reply_markup,
+                thumb_url=thumb_url,
+                reply_to_message_id=update.id,
+                referer=url,
             )
             return
 
@@ -943,21 +1014,22 @@ async def echo(bot, update):
             file_title = escape_html(tb_info.get("title", "Unknown"))
             
             await imog.delete(True)
-            
-            # Get thumbnail from engine response
-            thumbnail_url = tb_info.get('thumbnail') or tb_info.get('thumb')
-            
-            caption = (
-                f"<b>✅ Terabox file detected</b>\n\n"
-                f"<b> File:</b> <code>{file_title}</code>\n"
-                f"<b> Size:</b> {size_text}\n\n"
-                f"<b>🎯 Choose download option</b>\n\n"
-                "Send a photo now to set a custom thumbnail.\n"
-                "Use /delthumbnail to remove a saved thumbnail."
-            )
-            
-            await send_quality_buttons_with_thumbnail(
-                bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+            thumb_url = tb_info.get("thumbnail") or tb_info.get("thumb")
+            await send_buttons_with_thumbnail(
+                bot=bot,
+                chat_id=update.chat.id,
+                text=(
+                    f"<b>✅ Terabox file detected</b>\n\n"
+                    f"<b>📁 File:</b> <code>{file_title}</code>\n"
+                    f"<b>📦 Size:</b> {size_text}\n\n"
+                    f"<b>🎯 Choose download option</b>\n\n"
+                    "Send a photo now to set a custom thumbnail.\n"
+                    "Use /delthumbnail to remove a saved thumbnail."
+                ),
+                reply_markup=reply_markup,
+                thumb_url=thumb_url,
+                reply_to_message_id=update.id,
+                referer=url,
             )
             return
 
@@ -1004,14 +1076,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(sxy_info, task_id, "sxy", "Sxyprn")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = sxy_info.get('thumbnail') or sxy_info.get('thumb')
-                
-                caption = f"<b>🎯 Sxyprn video detected</b>\n\n<b>📹 Title:</b> {escape_html(sxy_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = sxy_info.get("thumbnail") or sxy_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Sxyprn video detected</b>\n\n<b>📹 Title:</b> {escape_html(sxy_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1041,14 +1114,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(ph_info, task_id, "ph", "Pornhub")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = ph_info.get('thumbnail') or ph_info.get('thumb')
-                
-                caption = f"<b>🎯 Pornhub video detected</b>\n\n<b>📹 Title:</b> {escape_html(ph_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = ph_info.get("thumbnail") or ph_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Pornhub video detected</b>\n\n<b>📹 Title:</b> {escape_html(ph_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1078,14 +1152,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(xv_info, task_id, "xv", "XVideos")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = xv_info.get('thumbnail') or xv_info.get('thumb')
-                
-                caption = f"<b>🎯 XVideos video detected</b>\n\n<b>📹 Title:</b> {escape_html(xv_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = xv_info.get("thumbnail") or xv_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 XVideos video detected</b>\n\n<b>📹 Title:</b> {escape_html(xv_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1115,14 +1190,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(rt_info, task_id, "rt", "RedTube")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = rt_info.get('thumbnail') or rt_info.get('thumb')
-                
-                caption = f"<b>🎯 RedTube video detected</b>\n\n<b>📹 Title:</b> {escape_html(rt_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = rt_info.get("thumbnail") or rt_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 RedTube video detected</b>\n\n<b>📹 Title:</b> {escape_html(rt_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1152,14 +1228,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(yp_info, task_id, "yp", "YouPorn")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = yp_info.get('thumbnail') or yp_info.get('thumb')
-                
-                caption = f"<b>🎯 YouPorn video detected</b>\n\n<b>📹 Title:</b> {escape_html(yp_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = yp_info.get("thumbnail") or yp_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 YouPorn video detected</b>\n\n<b>📹 Title:</b> {escape_html(yp_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1189,14 +1266,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(t8_info, task_id, "t8", "Tube8")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = t8_info.get('thumbnail') or t8_info.get('thumb')
-                
-                caption = f"<b>🎯 Tube8 video detected</b>\n\n<b>📹 Title:</b> {escape_html(t8_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = t8_info.get("thumbnail") or t8_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Tube8 video detected</b>\n\n<b>📹 Title:</b> {escape_html(t8_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1226,14 +1304,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(sb_info, task_id, "sb", "SpankBang")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = sb_info.get('thumbnail') or sb_info.get('thumb')
-                
-                caption = f"<b>🎯 SpankBang video detected</b>\n\n<b>📹 Title:</b> {escape_html(sb_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = sb_info.get("thumbnail") or sb_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 SpankBang video detected</b>\n\n<b>📹 Title:</b> {escape_html(sb_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1263,14 +1342,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(wx_info, task_id, "wx", "Wow.xxx")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = wx_info.get('thumbnail') or wx_info.get('thumb')
-                
-                caption = f"<b>🎯 Wow.xxx video detected</b>\n\n<b>📹 Title:</b> {escape_html(wx_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = wx_info.get("thumbnail") or wx_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Wow.xxx video detected</b>\n\n<b>📹 Title:</b> {escape_html(wx_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1300,14 +1380,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(xh_info, task_id, "xh", "Xhand")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = xh_info.get('thumbnail') or xh_info.get('thumb')
-                
-                caption = f"<b>🎯 Xhand.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(xh_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = xh_info.get("thumbnail") or xh_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Xhand.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(xh_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1337,14 +1418,15 @@ async def echo(bot, update):
                 
                 reply_markup = build_generic_engine_keyboard(bg_info, task_id, "bg", "Bang")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = bg_info.get('thumbnail') or bg_info.get('thumb')
-                
-                caption = f"<b>🎯 Bang.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(bg_info.get('title', 'Unknown')[:100])}\n\nChoose quality:"
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = bg_info.get("thumbnail") or bg_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=f"<b>🎯 Bang.com video detected</b>\n\n<b>📹 Title:</b> {escape_html(bg_info.get('title', 'Unknown')[:100])}\n\nChoose quality:",
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1378,15 +1460,16 @@ async def echo(bot, update):
 
                 reply_markup = build_generic_engine_keyboard(uni_info, task_id, "uni", "Video")
                 await imog.delete(True)
-                
-                # Get thumbnail from engine response
-                thumbnail_url = uni_info.get('thumbnail') or uni_info.get('thumb')
-                
-                caption = (f"<b>🎯 Video detected</b>\n\n<b>📹 Title:</b> "
-                          f"{escape_html((uni_info.get('title') or 'Video')[:100])}\n\nChoose quality:")
-                
-                await send_quality_buttons_with_thumbnail(
-                    bot, update.chat.id, caption, reply_markup, update.id, thumbnail_url
+                thumb_url = uni_info.get("thumbnail") or uni_info.get("thumb")
+                await send_buttons_with_thumbnail(
+                    bot=bot,
+                    chat_id=update.chat.id,
+                    text=(f"<b>🎯 Video detected</b>\n\n<b>📹 Title:</b> "
+                          f"{escape_html((uni_info.get('title') or 'Video')[:100])}\n\nChoose quality:"),
+                    reply_markup=reply_markup,
+                    thumb_url=thumb_url,
+                    reply_to_message_id=update.id,
+                    referer=url,
                 )
                 return
         except Exception as e:
@@ -1528,18 +1611,22 @@ async def echo(bot, update):
         else:
             reply_markup = build_format_keyboard(response_json, task_id)
         await imog.delete(True)
-        await bot.send_message(
+        thumb_url = get_thumb_from_ytdl_json(response_json)
+        await send_buttons_with_thumbnail(
+            bot=bot,
             chat_id=update.chat.id,
             text=(
                 "<b>🎯 Choose format</b>\n\n"
+                f"<b>📹 Title:</b> <code>{escape_html(str(response_json.get('title', 'Video'))[:100])}</code>\n\n"
                 "Send photo now for custom thumbnail.\n"
                 "Use /delthumbnail to remove saved thumbnail.\n\n"
                 "<b>🔐 Login format:</b>\n"
                 "<code>URL | filename | username | password</code>"
             ),
             reply_markup=reply_markup,
-            parse_mode=enums.ParseMode.HTML,
+            thumb_url=thumb_url,
             reply_to_message_id=update.id,
+            referer=url,
         )
     else:
         await imog.edit("<b>⚠️ No format found, checking direct link...</b>", parse_mode=enums.ParseMode.HTML)

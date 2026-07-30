@@ -272,11 +272,24 @@ def extract(url: str, cookies_file: str = None):
         except Exception:
             pass
 
-    # Extract thumbnail from og:image
     thumbnail = None
-    thumb_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
-    if thumb_match:
-        thumbnail = thumb_match.group(1).strip()
+    if json_ld:
+        try:
+            ld_data = json.loads(json_ld.group(1))
+            if isinstance(ld_data, dict):
+                thumbnail = ld_data.get("thumbnailUrl") or ld_data.get("thumbnail")
+                if isinstance(thumbnail, list) and thumbnail:
+                    thumbnail = thumbnail[0]
+        except Exception:
+            pass
+    if not thumbnail and html:
+        tm_img = (
+            re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+            or re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+            or re.search(r'<meta[^>]+itemprop=["\']thumbnailUrl["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+        )
+        if tm_img:
+            thumbnail = tm_img.group(1)
 
     # --- Step 4: Find hash — try main page first ---
     vid_hash = _find_hash(html) if html else None

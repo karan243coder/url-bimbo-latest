@@ -11,6 +11,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from plugins.youtube_dl_button import youtube_dl_call_back, terabox_call_back
 from plugins.dl_button import ddl_call_back
 from translation import Translation
+from utils import safe_edit_text_or_caption
 from plugins.forcesub import get_invite_link
 from plugins.media_pipeline import begin_interactive_job, end_interactive_job
 
@@ -41,7 +42,7 @@ async def button(bot, update):
         if cb_data.startswith("terabox="):
             logger.info("Routing to terabox_call_back")
             try:
-                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+                await safe_edit_text_or_caption(update.message, "⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
             except Exception:
                 pass
             
@@ -59,7 +60,7 @@ async def button(bot, update):
         elif "|" in cb_data:
             logger.info("Routing to youtube_dl_call_back")
             try:
-                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+                await safe_edit_text_or_caption(update.message, "⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
             except Exception:
                 pass
             
@@ -78,7 +79,7 @@ async def button(bot, update):
             update.data = f"{tg_type}|AUTO|{ext}|direct_{int(time.time())}"
             logger.info(f"Routing DIRECT link via yt-dlp ({tg_type})")
             try:
-                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+                await safe_edit_text_or_caption(update.message, "⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
             except Exception:
                 pass
             
@@ -96,7 +97,7 @@ async def button(bot, update):
         )):
             logger.info("Routing to ddl_call_back")
             try:
-                await update.message.edit_text("⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
+                await safe_edit_text_or_caption(update.message, "⏳ **Queue me hain...**\n\nWaiting for an active download slot...")
             except Exception:
                 pass
             

@@ -704,13 +704,6 @@ def _extract_from_html(html, page_url, cookie_header=None, ua=None, session=None
 
     title = None
     duration = None
-    thumbnail = None
-    
-    # Extract thumbnail from og:image
-    thumb_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
-    if thumb_match:
-        thumbnail = thumb_match.group(1).strip()
-    
     initials = _extract_window_initials(html)
     if isinstance(initials, dict):
         vm = initials.get("videoModel")
@@ -718,6 +711,25 @@ def _extract_from_html(html, page_url, cookie_header=None, ua=None, session=None
             title = vm.get("title") or title
             if isinstance(vm.get("duration"), (int, float)):
                 duration = int(vm["duration"])
+    thumbnail = None
+    if isinstance(initials, dict):
+        vm = initials.get("videoModel")
+        if isinstance(vm, dict):
+            thumbnail = (
+                vm.get("thumbURL")
+                or vm.get("posterURL")
+                or vm.get("thumb")
+                or vm.get("previewURL")
+            )
+    if not thumbnail:
+        tm_img = (
+            re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+            or re.search(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\'](.*?)["\']', html, re.I)
+            or re.search(r'"thumbURL"\s*:\s*"([^"]+)"', html, re.I)
+            or re.search(r'"posterURL"\s*:\s*"([^"]+)"', html, re.I)
+        )
+        if tm_img:
+            thumbnail = tm_img.group(1).replace("\\/", "/")
     if not title:
         tm = (
             re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', html, re.I)

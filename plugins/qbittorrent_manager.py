@@ -39,7 +39,7 @@ qb_torrents = {}  # hash -> task_id mapping
 
 
 async def init_qbittorrent():
-    """Initialize qBittorrent connection with retry logic"""
+    """Initialize qBittorrent connection"""
     global qb_client, QB_ENABLED
     
     if not Config.QB_ENABLED:
@@ -49,55 +49,37 @@ async def init_qbittorrent():
     try:
         import qbittorrentapi as qba
         
-        # Retry connection up to 5 times (daemon might take time to start)
-        max_retries = 5
-        retry_delay = 3  # seconds
+        qb_client = qba.Client(
+            host=Config.QB_URL,
+            username=Config.QB_USERNAME,
+            password=Config.QB_PASSWORD,
+            VERIFY_WEBUI_CERTIFICATE=False
+        )
         
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"qBittorrent connection attempt {attempt + 1}/{max_retries}...")
-                
-                qb_client = qba.Client(
-                    host=Config.QB_URL,
-                    username=Config.QB_USERNAME,
-                    password=Config.QB_PASSWORD,
-                    VERIFY_WEBUI_CERTIFICATE=False
-                )
-                
-                # Test connection
-                qb_client.auth_log_in()
-                version = qb_client.app_version()
-                
-                QB_ENABLED = True
-                logger.info(f"✅ qBittorrent connected: {Config.QB_URL} (v{version})")
-                
-                # Set preferences
-                qb_client.app_set_preferences({
-                    'save_path': Config.BIMBO_DOWNLOAD_LOCATION,
-                    'temp_path_enabled': True,
-                    'temp_path': Config.BIMBO_DOWNLOAD_LOCATION + '/.qb_temp',
-                })
-                
-                return True
-                
-            except Exception as e:
-                logger.warning(f"qBittorrent attempt {attempt + 1} failed: {e}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    logger.error(f"qBittorrent init failed after {max_retries} attempts: {e}")
-                    QB_ENABLED = False
-                    return False
+        # Test connection
+        qb_client.auth_log_in()
+        qb_client.app_version()
+        
+        QB_ENABLED = True
+        logger.info(f"✅ qBittorrent connected: {Config.QB_URL}")
+        
+        # Set preferences
+        qb_client.app_set_preferences({
+            'save_path': Config.BIMBO_DOWNLOAD_LOCATION,
+            'temp_path_enabled': True,
+            'temp_path': Config.BIMBO_DOWNLOAD_LOCATION + '/.qb_temp',
+        })
+        
+        return True
         
     except Exception as e:
-        logger.error(f"qBittorrent init error: {e}")
+        logger.error(f"qBittorrent init failed: {e}")
         QB_ENABLED = False
         return False
 
 
 async def start_qbittorrent_daemon():
-    """Start qBittorrent-nox daemon with proper waiting"""
+    """Start qBittorrent-nox daemon"""
     try:
         # Check if already running
         result = subprocess.run(['pgrep', '-f', 'qbittorrent-nox'], 
@@ -117,23 +99,16 @@ async def start_qbittorrent_daemon():
             '--webui-port=8090'
         ]
         
-        logger.info("Starting qBittorrent daemon...")
         subprocess.Popen(cmd, 
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         start_new_session=True)
         
-        # Wait for daemon to be ready (check if process is running)
-        for i in range(10):  # Wait up to 10 seconds
-            await asyncio.sleep(1)
-            result = subprocess.run(['pgrep', '-f', 'qbittorrent-nox'], 
-                                  capture_output=True, text=True)
-            if result.returncode == 0:
-                logger.info(f"✅ qBittorrent daemon started (took {i+1} seconds)")
-                return True
+        # Wait for startup
+        await asyncio.sleep(3)
         
-        logger.warning("qBittorrent daemon process not found after 10 seconds")
-        return False
+        logger.info("✅ qBittorrent daemon started")
+        return True
         
     except Exception as e:
         logger.error(f"Failed to start qBittorrent daemon: {e}")
