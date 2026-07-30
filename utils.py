@@ -295,3 +295,30 @@ async def safe_send_message(client, chat_id, text, **kwargs):
         logger.error(f"safe_send_message error: {e}")
         return None
 
+
+async def safe_edit_text_or_caption(message, text, **kwargs):
+    """Edit message text or caption (works for both text and photo messages) with FloodWait handling"""
+    try:
+        if getattr(message, "photo", None) or getattr(message, "video", None) or getattr(message, "document", None):
+            return await message.edit_caption(caption=text, **kwargs)
+        else:
+            return await message.edit_text(text=text, **kwargs)
+    except FloodWait as e:
+        logger.warning(f"FloodWait: Waiting {e.value}s before edit...")
+        await asyncio.sleep(e.value)
+        if getattr(message, "photo", None) or getattr(message, "video", None) or getattr(message, "document", None):
+            return await message.edit_caption(caption=text, **kwargs)
+        else:
+            return await message.edit_text(text=text, **kwargs)
+    except MessageNotModified:
+        return None
+    except Exception as e:
+        if "MESSAGE_EMPTY" in str(e).upper() or "NO TEXT IN THE MESSAGE" in str(e).upper():
+            try:
+                return await message.edit_caption(caption=text, **kwargs)
+            except Exception:
+                pass
+        logger.debug(f"safe_edit_text_or_caption skipped: {e}")
+        return None
+
+

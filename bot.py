@@ -6,7 +6,6 @@ import threading
 import subprocess
 import time
 import shutil
-import asyncio
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 from config import Config
@@ -195,9 +194,7 @@ if __name__ == "__main__":
         try:
             from plugins.qbittorrent_manager import start_qbittorrent_daemon
             threading.Thread(target=lambda: asyncio.run(start_qbittorrent_daemon()), daemon=True).start()
-            # Wait longer for daemon to start (Koyeb can be slow)
-            time.sleep(5)
-            logger.info(" qBittorrent daemon startup initiated")
+            time.sleep(2)  # Wait for daemon to start
         except Exception as e:
             logger.warning(f"qBittorrent daemon startup failed: {e}")
     
