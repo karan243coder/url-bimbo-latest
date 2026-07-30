@@ -623,29 +623,82 @@ async def handle_torrent(client: Client, message: Message):
 
     os.makedirs(download_path, exist_ok=True)
 
-    result = None
-    try:
-        # Try aria2c first
-        result = await _download_torrent_aria2(url, download_path, dl_task_id, user_id, client)
-
-        # Fallback to libtorrent
-        if result is None or (isinstance(result, dict) and not result.get('success')):
-            if LIBTORRENT_AVAILABLE:
-                err = result.get('error', 'aria2c unavailable') if result else 'aria2c returned None'
-                logger.info(f"aria2c failed ({err}), switching to libtorrent")
-                task = get_task(dl_task_id)
-                if task:
-                    task['detail'] = f"Switching engine..."
-                    task['engine'] = 'libtorrent'
-                await update_user_progress(client, user_id, force=True)
-                await asyncio.sleep(1)
-
-                result = await _download_torrent_libtorrent(url, download_path, dl_task_id, user_id, client)
-            else:
-                result = result or {'success': False, 'error': 'aria2c failed and libtorrent not installed'}
-    except Exception as e:
-        logger.error(f"Torrent download exception: {e}", exc_info=True)
-        result = {'success': False, 'error': str(e)}
+    # ─ Try qBittorrent first if enabled ──
+    qb_used = False
+    if Config.QB_ENABLED:
+        try:
+            from plugins.qbittorrent_manager import qb_client, QB_ENABLED
+            
+            if QB_ENABLED and qb_client:
+                logger.info("Using qBittorrent for torrent download...")
+                
+                # Add torrent to qBittorrent
+                try:
+                    qb_client.torrents_add(urls=url)
+                    await asyncio.sleep(2)
+                    
+                    # Find the torrent
+                    torrents = qb_client.torrents_info(sort='added_on', reverse=True, limit=1)
+                    if torrents:
+                        torrent = torrents[0]
+                        torrent_hash = torrent.hash
+                        
+                        # Update task info
+                        update_task(dl_task_id, 0, torrent.size, 0, 'downloading', 'qbittorrent')
+                        task = get_task(dl_task_id)
+                        if task:
+                            task['filename'] = torrent.name
+                        
+                        # Monitor progress
+                        while True:
+                            torrent_info = qb_client.torrents_info(torrent_hashes=torrent_hash)
+                            if not torrent_info:
+                                break
+                            
+                            torrent = torrent_info[0]
+                            downloaded = torrent.downloaded
+                            total = torrent.size
+                            speed = torrent.dlspeed
+                            
+                            update_task(dl_task_id, downloaded, total, speed, 'downloading', 'qbittorrent')
+                            
+                            if torrent.state in ['completed', 'pausedUP', 'uploading']:
+                                update_task(dl_task_id, total, total, 0, 'completed', 'qbittorrent')
+                                qb_used = True
+                                break
+                            
+                            await asyncio.sleep(2)
+                            await update_user_progress(client, user_id)
+                except Exception as e:
+                    logger.warning(f"qBittorrent failed: {e}")
+        except Exception as e:
+            logger.debug(f"qBittorrent not available: {e}")
+    
+    # If qBittorrent didn't work, fallback to aria2c/libtorrent
+    if not qb_used:
+        result = None
+        try:
+            # Try aria2c first
+            result = await _download_torrent_aria2(url, download_path, dl_task_id, user_id, client)
+            
+            # Fallback to libtorrent
+            if result is None or (isinstance(result, dict) and not result.get('success')):
+                if LIBTORRENT_AVAILABLE:
+                    err = result.get('error', 'aria2c unavailable') if result else 'aria2c returned None'
+                    logger.info(f"aria2c failed ({err}), switching to libtorrent")
+                    task = get_task(dl_task_id)
+                    if task:
+                        task['detail'] = f"Switching engine..."
+                        task['engine'] = 'libtorrent'
+                    await update_user_progress(client, user_id, force=True)
+                    await asyncio.sleep(1)
+                    
+                    result = await _download_torrent_libtorrent(url, download_path, dl_task_id, user_id, client)
+                else:
+                    result = result or {'success': False, 'error': 'aria2c failed and libtorrent not installed'}
+        except Exception as e:
+            logger.error(f"Torrent download exception: {e}", exc_info=True)
+            result = {'success': False, 'error': str(e)}
 
     # Release download slot
     await dl_stage_ctx.__aexit__(None, None, None)
