@@ -188,6 +188,16 @@ if __name__ == "__main__":
     if not _single_port:
         threading.Thread(target=run_health_server, daemon=True).start()
     threading.Thread(target=start_aria2_daemon, daemon=True).start()
+    
+    # Start qBittorrent daemon if enabled
+    if Config.QB_ENABLED:
+        try:
+            from plugins.qbittorrent_manager import start_qbittorrent_daemon
+            threading.Thread(target=lambda: asyncio.run(start_qbittorrent_daemon()), daemon=True).start()
+            time.sleep(2)  # Wait for daemon to start
+        except Exception as e:
+            logger.warning(f"qBittorrent daemon startup failed: {e}")
+    
     time.sleep(2)
     threading.Thread(target=auto_cleanup_loop, daemon=True).start()
 
@@ -213,7 +223,29 @@ if __name__ == "__main__":
             from plugins.auto_cleaner import start_cleaner
             loop = asyncio.get_event_loop()
             loop.create_task(start_cleaner(BIMBO_CLIENT))
-            logger.info("🧹 Auto-cleaner hooked at startup")
+            logger.info(" Auto-cleaner hooked at startup")
+            
+            # Start stuck task cleanup (runs every 60 seconds)
+            async def periodic_cleanup():
+                while True:
+                    await asyncio.sleep(60)
+                    try:
+                        from helper_funcs.display_progress import cleanup_stuck_tasks
+                        await cleanup_stuck_tasks(BIMBO_CLIENT, max_age_seconds=300)
+                    except Exception as e:
+                        logger.debug(f"Periodic cleanup error: {e}")
+            
+            loop.create_task(periodic_cleanup())
+            logger.info(" Stuck task cleanup hooked at startup (60s interval)")
+            
+            # Initialize qBittorrent if enabled
+            if Config.QB_ENABLED:
+                try:
+                    from plugins.qbittorrent_manager import init_qbittorrent
+                    loop.create_task(init_qbittorrent())
+                    logger.info("🧲 qBittorrent initialization started")
+                except Exception as qe:
+                    logger.warning(f"qBittorrent init failed: {qe}")
         except Exception as ce:
             logger.warning(f"Cleaner startup hook failed (will auto-start on first msg): {ce}")
         # Start the video stream server (/watch, /dl) for /stream links.
