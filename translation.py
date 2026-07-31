@@ -14,8 +14,8 @@ class Translation(object):
 👋 Hello {0} (<code>{1}</code>)
 
 • <b>Status:</b> <code>Active 🟢</code>
-• <b>Speed:</b> <code>Up to 100 MB/s 🚀</code>
-• <b>Limit:</b> <code>4 GB Available 📂</code>
+• <b>Download:</b> <code>Download video from any link</code>
+• <b>Limit:</b> <code>2 GB Available 📂</code>
 
 <i>✨ Just send me any direct link, and I will upload it instantly to Telegram.</i>
 """
