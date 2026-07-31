@@ -7,17 +7,22 @@ class Translation(object):
     # ----------------------------------------------------------------
     # START / HOME / HELP
     # ----------------------------------------------------------------
-    # ⚡ NEW SHORT ADVANCE START - URL UPLOADER PRO
+    # ⚡ SOUMITRISHA PRO - SHORT ADVANCE ENGLISH VERSION
     BIMBO_START_TEXT = """
-<b>⚡ URL UPLOADER PRO</b>
+<b>⚡ Soumitrisha ⚡</b>
 ━━━━━━━━━━━━━━━━━━━━
 👋 Hello {0} (<code>{1}</code>)
 
 • <b>Status:</b> <code>Active 🟢</code>
-• <b>Download:</b> <code>Download video from any link</code>
-• <b>Limit:</b> <code>2 GB Available 📂</code>
+• <b>Speed:</b> <code>Ultra-Fast 🚀</code>
+• <b>Limit:</b> <code>4GB Available 📂</code>
 
-<i>✨ Just send me any direct link, and I will upload it instantly to Telegram.</i>
+<b>🚀 What I Do:</b>
+• Instant Stream Link Generator
+• Any URL → Telegram Direct Upload
+• Supports Terabox, YouTube, IG, M3U8, Direct & 1000+ Sites
+
+<i>✨ Just send me any link, I'll upload it instantly with streaming support.</i>
 """
 
     BIMBO_HELP_TEXT = """
