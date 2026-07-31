@@ -258,7 +258,7 @@ async def menu_cbs(client: Client, c: CallbackQuery):
             txt = Translation.BIMBO_START_TEXT
         kb = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("🛠️ Help", callback_data="help"),
+                InlineKeyboardButton("🛠️ Tools Menu", callback_data="tools_menu"),
                 InlineKeyboardButton("📊 Stats", callback_data="status"),
             ],
             [
