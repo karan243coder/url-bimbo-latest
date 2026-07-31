@@ -7,26 +7,17 @@ class Translation(object):
     # ----------------------------------------------------------------
     # START / HOME / HELP
     # ----------------------------------------------------------------
+    # ⚡ NEW SHORT ADVANCE START - URL UPLOADER PRO
     BIMBO_START_TEXT = """
-<b>👋 Hey {}!</b>
+<b>⚡ URL UPLOADER PRO</b>
+━━━━━━━━━━━━━━━━━━━━
+👋 Hello {0} (<code>{1}</code>)
 
-𝗜 𝗮𝗺 <b>BIMBO URL Uploader Bot 🤖</b>
-Mujhe koi bhi link bhejo — main usko Telegram pe download karke
-file / video / audio ke roop me upload kar dunga.
+• <b>Status:</b> <code>Active 🟢</code>
+• <b>Speed:</b> <code>Up to 100 MB/s 🚀</code>
+• <b>Limit:</b> <code>4 GB Available 📂</code>
 
-<b>🔥 Supported Sources:</b>
-• YouTube, Instagram Reels, TikTok
-• Terabox, M3u8, Direct HTTP/HTTPS
-• xHamster, Pixeldrain, Gofile
-• Torrent/Magnet (if libtorrent available)
-
-<b>🎬 Extra Features:</b>
-• Screenshots, Sample Video, Trim, Compress
-• Watermark, Audio Extract, Zip/Unzip
-• Google Drive / Mega / Gofile cloud upload
-• Advanced Progress UI, Queue System
-
-Use /help for full command list.
+<i>✨ Just send me any direct link, and I will upload it instantly to Telegram.</i>
 """
 
     BIMBO_HELP_TEXT = """
@@ -105,16 +96,15 @@ Use /help for full command list.
     # ----------------------------------------------------------------
     # BUTTONS
     # ----------------------------------------------------------------
+    # ⚡ NEW 2x2 BUTTONS - FULL WORKING
     BIMBO_START_BUTTONS = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("💎 Plans", callback_data="plans"),
+            InlineKeyboardButton("🛠️ Help", callback_data="help"),
+            InlineKeyboardButton("📊 Stats", callback_data="status"),
         ],
         [
-            InlineKeyboardButton("💡 Help", callback_data="help"),
-            InlineKeyboardButton("🔧 Settings", callback_data="settings"),
-        ],
-        [
-            InlineKeyboardButton("❌ Close", callback_data="close"),
+            InlineKeyboardButton("📢 Updates", url="https://t.me/Bimbobot69"),
+            InlineKeyboardButton("👥 Support", url="https://t.me/Bimbo69"),
         ],
     ])
 
