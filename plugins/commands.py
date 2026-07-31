@@ -323,16 +323,28 @@ async def menu_cbs(client: Client, c: CallbackQuery):
                "• /gdrive — upload to Google Drive (SA creds)\n")
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Home", callback_data="home")]])
     try:
-        await c.message.edit_text(txt, parse_mode=enums.ParseMode.HTML,
-                                  reply_markup=kb, disable_web_page_preview=True)
+        # ✅ FIX HELP BUTTON: Use safe_edit that works for both photo + text messages
+        from utils import safe_edit_text_or_caption
+        await safe_edit_text_or_caption(c.message, txt, parse_mode=enums.ParseMode.HTML,
+                                        reply_markup=kb)
         # ✅ FIX: Reset auto-delete timer to 10s after each button click
         try:
             from plugins.auto_cleaner import track_bot_response
             await track_bot_response(c.message, reason=f"menu_{d}")
         except Exception:
             pass
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"menu_cbs edit failed: {e}")
+        try:
+            # Fallback: try edit_text then edit_caption
+            await c.message.edit_text(txt, parse_mode=enums.ParseMode.HTML,
+                                      reply_markup=kb, disable_web_page_preview=True)
+        except Exception:
+            try:
+                await c.message.edit_caption(caption=txt, parse_mode=enums.ParseMode.HTML,
+                                             reply_markup=kb)
+            except Exception:
+                pass
     try:
         await c.answer()
     except Exception:
