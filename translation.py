@@ -20,7 +20,7 @@ class Translation(object):
 <b>🚀 What I Do:</b>
 • Instant Stream Link Generator
 • Any URL → Telegram Direct Upload
-• Supports Terabox, YouTube, IG, M3U8, Direct & 1000+ Sites
+• Supports Adult-site, YouTube, IG, M3U8, Direct & 1000+ Sites
 
 <i>✨ Just send me any link, I'll upload it instantly with streaming support.</i>
 """
