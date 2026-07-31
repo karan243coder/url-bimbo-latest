@@ -142,8 +142,12 @@ async def button(bot, update):
                         disable_web_page_preview=True
                     )
                     return
+            try:
+                start_txt = Translation.BIMBO_START_TEXT.format(update.from_user.mention, update.from_user.id)
+            except Exception:
+                start_txt = Translation.BIMBO_START_TEXT
             await update.message.edit(
-                text=Translation.BIMBO_START_TEXT.format(update.from_user.mention),
+                text=start_txt,
                 reply_markup=Translation.BIMBO_START_BUTTONS,
             )
 

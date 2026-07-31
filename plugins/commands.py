@@ -77,11 +77,11 @@ async def gatekeeper(client: Client, m: Message):
         return
 
 
-# =================== HELP (unified) ===================
+# =================== HELP (unified) - FIXED AUTO-DELETE 10s ===================
 @Client.on_message(filters.private & _cmd("help"))
 async def help_cmd(client: Client, m: Message):
     await AddUser(client, m)
-    await m.reply_text(
+    bot_msg = await m.reply_text(
         Translation.BIMBO_HELP_TEXT,
         parse_mode=enums.ParseMode.HTML,
         disable_web_page_preview=True,
@@ -90,6 +90,12 @@ async def help_cmd(client: Client, m: Message):
              InlineKeyboardButton("✖️ Close", callback_data="close")]
         ])
     )
+    # ✅ FIX: Auto-delete both user cmd + bot response in 10s
+    try:
+        from plugins.auto_cleaner import schedule_delete_both
+        await schedule_delete_both(client, m, bot_msg)
+    except Exception:
+        pass
 
 
 # =================== START (unified, supports referrals and verify) ===================
@@ -136,22 +142,32 @@ async def start_cmd(client: Client, m: Message):
     # 🐱 LadyCat greeting sticker (welcome ke saath) — fail ho to ignore
     await send_sticker(client, m.chat.id, mood="start", reply_to=m.id)
 
-    # Custom start pic?
-    start_text = Config.BIMBO_START_MSG or Translation.BIMBO_START_TEXT.format(m.from_user.mention)
+    # Custom start msg? If owner set custom, use it else new PRO design
+    try:
+        if Config.BIMBO_START_MSG:
+            start_text = Config.BIMBO_START_MSG.format(
+                mention=m.from_user.mention,
+                id=m.from_user.id,
+                first=m.from_user.first_name
+            )
+        else:
+            start_text = Translation.BIMBO_START_TEXT.format(m.from_user.mention, m.from_user.id)
+    except Exception:
+        # Fallback old style
+        try:
+            start_text = Translation.BIMBO_START_TEXT.format(m.from_user.mention, m.from_user.id)
+        except Exception:
+            start_text = Translation.BIMBO_START_TEXT
 
+    # ⚡ NEW SHORT 2x2 BUTTONS - FULL WORKING
     buttons = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📢 Update Channel", url="https://t.me/Bimbobot69"),
-            InlineKeyboardButton("👨‍💻 Owner", url="https://t.me/Bimbo69"),
+            InlineKeyboardButton("🛠️ Help", callback_data="help"),
+            InlineKeyboardButton("📊 Stats", callback_data="status"),
         ],
         [
-            InlineKeyboardButton("❓ Help", callback_data="help"),
-            InlineKeyboardButton("💎 Plans", callback_data="plans"),
-            InlineKeyboardButton("📊 Status", callback_data="status"),
-        ],
-        [
-            InlineKeyboardButton("🎬 Tools Menu", callback_data="tools_menu"),
-            InlineKeyboardButton("☁️ Cloud", callback_data="cloud_menu"),
+            InlineKeyboardButton("📢 Updates", url="https://t.me/Bimbobot69"),
+            InlineKeyboardButton("👥 Support", url="https://t.me/Bimbo69"),
         ],
     ])
 
@@ -186,27 +202,43 @@ async def start_cmd(client: Client, m: Message):
         except Exception as e:
             logger.debug(f"Random image fallback failed: {e}")
     
-    # Send photo if we have one
+    # Send photo if we have one - FIXED AUTO-DELETE
     if start_pic:
         try:
-            await client.send_photo(m.chat.id, start_pic, caption=start_text,
+            bot_msg = await client.send_photo(m.chat.id, start_pic, caption=start_text,
                                     parse_mode=enums.ParseMode.HTML,
                                     reply_markup=buttons,
                                     reply_to_message_id=m.id)
+            # ✅ FIX: Track both for 10s delete
+            try:
+                from plugins.auto_cleaner import schedule_delete_both
+                await schedule_delete_both(client, m, bot_msg)
+            except Exception:
+                pass
             return
         except Exception as e:
             logger.debug(f"Start photo failed: {e}")
     
-    # Fallback: text only
-    await m.reply_text(start_text, parse_mode=enums.ParseMode.HTML,
+    # Fallback: text only - FIXED AUTO-DELETE
+    bot_msg = await m.reply_text(start_text, parse_mode=enums.ParseMode.HTML,
                        reply_markup=buttons, disable_web_page_preview=True,
                        reply_to_message_id=m.id)
+    try:
+        from plugins.auto_cleaner import schedule_delete_both
+        await schedule_delete_both(client, m, bot_msg)
+    except Exception:
+        pass
 
 
 # =================== CANCEL ===================
 @Client.on_message(filters.private & _cmd("cancel"))
 async def cancel_cmd(client: Client, m: Message):
-    await m.reply_text(Translation.BIMBO_CANCEL_STR)
+    bot_msg = await m.reply_text(Translation.BIMBO_CANCEL_STR)
+    try:
+        from plugins.auto_cleaner import schedule_delete_both
+        await schedule_delete_both(client, m, bot_msg)
+    except:
+        pass
 
 
 # =================== CALLBACKS for start/help/about/tools/cloud menus ===================
@@ -220,15 +252,19 @@ async def menu_cbs(client: Client, c: CallbackQuery):
             pass
         return
     if d == "home":
-        txt = Translation.BIMBO_START_TEXT.format(c.from_user.mention)
+        try:
+            txt = Translation.BIMBO_START_TEXT.format(c.from_user.mention, c.from_user.id)
+        except Exception:
+            txt = Translation.BIMBO_START_TEXT
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📢 Channel", url="https://t.me/Bimbobot69"),
-             InlineKeyboardButton("👨‍💻 Owner", url="https://t.me/Bimbo69")],
-            [InlineKeyboardButton("❓ Help", callback_data="help"),
-             InlineKeyboardButton("💎 Plans", callback_data="plans"),
-             InlineKeyboardButton("📊 Status", callback_data="status")],
-            [InlineKeyboardButton("🎬 Tools", callback_data="tools_menu"),
-             InlineKeyboardButton("☁️ Cloud", callback_data="cloud_menu")],
+            [
+                InlineKeyboardButton("🛠️ Help", callback_data="help"),
+                InlineKeyboardButton("📊 Stats", callback_data="status"),
+            ],
+            [
+                InlineKeyboardButton("📢 Updates", url="https://t.me/Bimbobot69"),
+                InlineKeyboardButton("👥 Support", url="https://t.me/Bimbo69"),
+            ],
         ])
     elif d == "help":
         txt = Translation.BIMBO_HELP_TEXT
@@ -289,6 +325,12 @@ async def menu_cbs(client: Client, c: CallbackQuery):
     try:
         await c.message.edit_text(txt, parse_mode=enums.ParseMode.HTML,
                                   reply_markup=kb, disable_web_page_preview=True)
+        # ✅ FIX: Reset auto-delete timer to 10s after each button click
+        try:
+            from plugins.auto_cleaner import track_bot_response
+            await track_bot_response(c.message, reason=f"menu_{d}")
+        except Exception:
+            pass
     except Exception:
         pass
     try:
